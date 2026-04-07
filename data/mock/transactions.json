@@ -1,0 +1,8 @@
+[
+  {"tx_id": "CB-TX-7F3A9C", "asset_type": "BTC", "status": "completed", "detail": "Settlement confirmed on-chain. Funds are available in your balance."},
+  {"tx_id": "CB-TX-PENDING01", "asset_type": "ETH", "status": "pending", "detail": "Network congestion may delay confirmation. You will be notified when it completes."},
+  {"tx_id": "CB-TX-FAIL-22", "asset_type": "USDC", "status": "failed", "detail": "The send could not be completed. Check the destination address and network."},
+  {"tx_id": "CB-TX-REVIEW88", "asset_type": "SOL", "status": "delayed review", "detail": "This transfer is under additional review for security. No action needed unless we email you."},
+  {"tx_id": "CB-TX-LTC-990", "asset_type": "LTC", "status": "completed", "detail": "Litecoin transfer confirmed. Funds are reflected in your account balance."},
+  {"tx_id": "CB-TX-DOGE-01", "asset_type": "DOGE", "status": "pending", "detail": "Dogecoin transaction is awaiting block confirmations. This typically takes a few minutes."}
+]

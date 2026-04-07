@@ -1,0 +1,16 @@
+[theme]
+base = "light"
+primaryColor = "#0052FF"
+backgroundColor = "#F8FAFC"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1E293B"
+font = "sans serif"
+
+[server]
+headless = true
+# Avoid noisy "no module torchvision" warnings from Streamlit's file watcher
+# scanning the transformers package on every reload.
+fileWatcherType = "watchdog"
+
+[browser]
+gatherUsageStats = false

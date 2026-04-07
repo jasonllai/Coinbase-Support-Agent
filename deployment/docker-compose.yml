@@ -1,0 +1,28 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile
+    env_file:
+      - ../.env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../data:/app/data
+    command: bash -lc "uvicorn backend.main:app --host 0.0.0.0 --port 8000"
+
+  ui:
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      API_BASE: http://api:8000
+    ports:
+      - "8501:8501"
+    volumes:
+      - ../data:/app/data
+    depends_on:
+      - api
+    command: bash -lc "streamlit run frontend/streamlit_app.py --server.address 0.0.0.0 --server.port 8501"

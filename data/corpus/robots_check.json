@@ -1,0 +1,8 @@
+{
+  "checked_at": "2026-04-06T23:32:23.263182+00:00",
+  "sample_url": "https://help.coinbase.com/en/coinbase",
+  "allowed": true,
+  "reason": "robots.txt unavailable or blocked; default allow with strict rate limits + Wayback",
+  "robots_url": "https://help.coinbase.com/robots.txt",
+  "note": "Live help.coinbase.com is often Cloudflare-protected; ingestion uses Wayback."
+}
