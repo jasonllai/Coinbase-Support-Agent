@@ -1,4 +1,4 @@
-"""Grounded KB answering over retrieved chunks."""
+"""Grounded KB answering over retrieved chunks, with optional conversation context."""
 
 from __future__ import annotations
 
@@ -11,7 +11,18 @@ from app.retrieval.retriever import RetrievedChunk, get_retriever
 log = logging.getLogger(__name__)
 
 
-def answer_kb(user_text: str) -> tuple[str, str | None, list[dict], float]:
+def answer_kb(
+    user_text: str,
+    conversation_tail: str = "",
+) -> tuple[str, str | None, list[dict], float]:
+    """Retrieve relevant chunks then call the LLM to produce a grounded answer.
+
+    Args:
+        user_text: The user's current question.
+        conversation_tail: Recent conversation turns (formatted text) for follow-up context.
+    Returns:
+        (concise_answer, details, citations, confidence)
+    """
     r = get_retriever()
     hits = r.retrieve(user_text)
 
@@ -19,7 +30,10 @@ def answer_kb(user_text: str) -> tuple[str, str | None, list[dict], float]:
     citations = []
     for h in hits:
         context_blocks.append(
-            f"SOURCE_TITLE: {h.article_title}\nSECTION: {h.section_title}\nURL: {h.canonical_url}\nTEXT:\n{h.text}\n",
+            f"SOURCE_TITLE: {h.article_title}\n"
+            f"SECTION: {h.section_title}\n"
+            f"URL: {h.canonical_url}\n"
+            f"TEXT:\n{h.text}\n",
         )
         citations.append(
             {
@@ -32,11 +46,14 @@ def answer_kb(user_text: str) -> tuple[str, str | None, list[dict], float]:
         )
     context = "\n---\n".join(context_blocks)[:11000]
 
+    # Build user prompt — include conversation history for follow-up awareness
+    history_block = f"CONVERSATION HISTORY:\n{conversation_tail}\n\n" if conversation_tail else ""
+    user_prompt = f"{history_block}Question:\n{user_text}\n\nSources:\n{context}"
+
     client = get_llm_client()
-    user = f"Question:\n{user_text}\n\nSources:\n{context}"
     try:
         out = client.chat_json(
-            [{"role": "system", "content": KB_QA_SYSTEM}, {"role": "user", "content": user}],
+            [{"role": "system", "content": KB_QA_SYSTEM}, {"role": "user", "content": user_prompt}],
             temperature=0.2,
         )
         conf = float(out.get("confidence", 0.5))

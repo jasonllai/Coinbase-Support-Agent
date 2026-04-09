@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import os
+
+# Must be set before any FAISS / PyTorch import to prevent macOS libomp conflict
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
+import json
 import sys
 from datetime import datetime
 from pathlib import Path

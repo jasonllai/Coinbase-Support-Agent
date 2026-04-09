@@ -56,15 +56,50 @@ def _extract_ticket_slots(text: str, slots: dict[str, Any]) -> tuple[str, str, s
     return it, email, desc
 
 
-def _recent_context(messages: list[dict[str, Any]], max_chars: int = 2500) -> str:
-    tail = messages[-8:]
+def _build_router_context(messages: list[dict[str, Any]], max_turns: int = 6) -> str:
+    """Build structured context for the intent router.
+
+    Includes the last N turns with role labels, plus a structured summary of
+    the most recent assistant message (intent / status / action) so the router
+    can handle continuations correctly.
+    """
+    tail = messages[-max_turns:]
+    lines: list[str] = []
+
+    for m in tail:
+        role = m.get("role", "user")
+        content = (m.get("content") or "")[:500]
+        meta = m.get("meta") or {}
+
+        if role == "assistant":
+            intent   = meta.get("intent", "")
+            status   = meta.get("status", "")
+            action   = meta.get("action") or {}
+            act_name = action.get("name", "")
+            missing  = action.get("missing") or []
+
+            label = f"ASSISTANT [intent={intent}, status={status}"
+            if act_name:
+                label += f", action={act_name}"
+            if missing:
+                label += f", missing={missing}"
+            label += "]"
+            lines.append(f"{label}: {content}")
+        else:
+            lines.append(f"USER: {content}")
+
+    return "\n".join(lines)
+
+
+def _conversation_tail_for_qa(messages: list[dict[str, Any]], max_turns: int = 4) -> str:
+    """Plain-text conversation tail for KB QA follow-up context."""
+    tail = messages[-max_turns * 2:]
     lines = []
     for m in tail:
-        role = m.get("role", "")
-        content = m.get("content", "")
+        role    = "User" if m.get("role") == "user" else "Assistant"
+        content = (m.get("content") or "")[:600]
         lines.append(f"{role}: {content}")
-    text = "\n".join(lines)
-    return text[-max_chars:]
+    return "\n".join(lines)
 
 
 class AgentState(TypedDict, total=False):
@@ -107,7 +142,8 @@ def node_route_after_guard(state: AgentState) -> Literal["intent", "end"]:
 
 
 def node_intent(state: AgentState) -> AgentState:
-    ctx = _recent_context(state.get("messages", []) + [{"role": "user", "content": state["user_input"]}])
+    # Build rich structured context so the router understands continuations
+    ctx = _build_router_context(state.get("messages", []))
     route = classify_intent(state["user_input"], ctx)
     trace = list(state.get("router_trace", []))
     route_dict = route.model_dump(mode="json")  # mode=json serialises enum → str
@@ -122,6 +158,25 @@ def _last_citations_from_messages(messages: list[dict[str, Any]]) -> list[dict[s
             if cits:
                 return list(cits)
     return []
+
+
+def _last_assistant_meta(messages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return meta dict from the most recent assistant message, or {}."""
+    for m in reversed(messages or []):
+        if m.get("role") == "assistant":
+            return m.get("meta") or {}
+    return {}
+
+
+def _pending_action(messages: list[dict[str, Any]]) -> tuple[str, list[str]]:
+    """Return (action_name, missing_fields) if the last assistant turn was a clarify for an action."""
+    meta = _last_assistant_meta(messages)
+    if meta.get("status") != "clarify":
+        return "", []
+    action = meta.get("action") or {}
+    name = action.get("name", "")
+    missing = list(action.get("missing") or [])
+    return name, missing
 
 
 def node_dispatch(state: AgentState) -> AgentState:
@@ -214,6 +269,9 @@ def node_dispatch(state: AgentState) -> AgentState:
         )
         return {"response": resp.model_dump()}
 
+    # ── Continuation: detect if last turn was mid-action and router lost track ──
+    pending_act, _pending_missing = _pending_action(msgs)
+
     route_data = state.get("_route") or {}
     intent_val = route_data.get("intent")
     if isinstance(intent_val, Intent):
@@ -229,11 +287,25 @@ def node_dispatch(state: AgentState) -> AgentState:
             intent = Intent.AMBIGUOUS
     slots = dict(route_data.get("slots") or {})
 
+    # Override router if it mis-classified a follow-up to an in-progress action
+    _safe_intents = {Intent.UNSAFE, Intent.SECURITY_SENSITIVE, Intent.OUT_OF_SCOPE}
+    if pending_act == "check_transaction" and intent not in _safe_intents:
+        tx_try, asset_try = _extract_tx_slots(user, slots)
+        if tx_try or asset_try:
+            intent = Intent.ACTION_CHECK_TRANSACTION
+    elif pending_act == "create_ticket" and intent not in _safe_intents:
+        _, email_try, _ = _extract_ticket_slots(user, slots)
+        if email_try or (intent not in (Intent.KB_QA,) and len(user.strip()) > 3):
+            intent = Intent.ACTION_CREATE_TICKET
+    elif pending_act == "account_recovery" and intent not in _safe_intents:
+        if intent != Intent.KB_QA:
+            intent = Intent.ACTION_ACCOUNT_RECOVERY
+
     if intent in (Intent.UNSAFE, Intent.SECURITY_SENSITIVE):
         msg = (
-            "I can’t help bypass account security, KYC, or fraud protections."
+            "I can't help bypass account security, KYC, or fraud protections."
             if intent == Intent.SECURITY_SENSITIVE
-            else "I can’t help with that request."
+            else "I can't help with that request."
         )
         resp = AgentResponse(
             session_id=sid,
@@ -247,16 +319,17 @@ def node_dispatch(state: AgentState) -> AgentState:
         resp = AgentResponse(
             session_id=sid,
             message=(
-                "I’m focused on **Coinbase customer support** topics (account access, security, transactions, fees, and getting started). "
-                "Try asking about one of those areas."
+                "I'm focused on **Coinbase customer support** topics (account access, security, "
+                "transactions, fees, and getting started). Try asking about one of those areas."
             ),
             intent=intent.value,
             status="refusal",
         )
         return {"response": resp.model_dump()}
 
-    if intent == Intent.AMBIGUOUS or route_data.get("clarifying_question"):
-        q = route_data.get("clarifying_question") or "Could you clarify what you want to do on Coinbase?"
+    # Only ask for clarification when intent IS ambiguous — never gate valid intents on this
+    if intent == Intent.AMBIGUOUS:
+        q = route_data.get("clarifying_question") or "Could you clarify what you need help with on Coinbase?"
         resp = AgentResponse(session_id=sid, message=q, intent=intent.value, status="clarify")
         return {"response": resp.model_dump()}
 
@@ -428,7 +501,8 @@ def node_dispatch(state: AgentState) -> AgentState:
         )
         return {"response": resp.model_dump()}
 
-    concise, details, citations, conf = answer_kb(user)
+    conv_tail = _conversation_tail_for_qa(msgs)
+    concise, details, citations, conf = answer_kb(user, conversation_tail=conv_tail)
     if conf < 0.25:
         concise = concise + "\n\n_(Low confidence — please verify in the linked articles.)_"
     resp = AgentResponse(
@@ -452,9 +526,10 @@ def node_persist(state: AgentState) -> AgentState:
         "role": "assistant",
         "content": resp.get("message", ""),
         "meta": {
-            "intent": resp.get("intent"),
+            "intent":    resp.get("intent"),
+            "status":    resp.get("status"),   # ← needed for continuation detection
             "citations": resp.get("citations"),
-            "action": resp.get("action"),
+            "action":    resp.get("action"),
         },
     }
     messages = list(state.get("messages", []))

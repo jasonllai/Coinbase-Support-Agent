@@ -27,9 +27,15 @@ class Settings(BaseSettings):
     llm_max_tokens: int = Field(default=2048, alias="LLM_MAX_TOKENS")
     llm_temperature: float = Field(default=0.2, alias="LLM_TEMPERATURE")
 
-    # Embeddings (local)
+    # Embeddings (remote API — https://rsm-8430-a2.bjlkeng.io)
+    embedding_base_url: str = Field(
+        default="https://rsm-8430-a2.bjlkeng.io/v1",
+        alias="EMBEDDING_BASE_URL",
+    )
+    # Re-uses LLM_API_KEY if not set separately
+    embedding_api_key: str = Field(default="", alias="EMBEDDING_API_KEY")
     embedding_model: str = Field(
-        default="BAAI/bge-small-en-v1.5",
+        default="@cf/baai/bge-base-en-v1.5",
         alias="EMBEDDING_MODEL",
     )
 

@@ -43,18 +43,6 @@ class HybridRetriever:
                 self._metas.append(json.loads(line))
         corpus_tokens = [_tokenize(m["text"]) for m in self._metas]
         self._bm25 = BM25Okapi(corpus_tokens)
-        self._reranker = None
-
-    def _load_reranker(self):
-        if self._reranker is not None:
-            return self._reranker
-        try:
-            from sentence_transformers import CrossEncoder
-
-            self._reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
-        except Exception:
-            self._reranker = False  # type: ignore[assignment]
-        return self._reranker
 
     def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
         s = self._s
@@ -123,16 +111,6 @@ class HybridRetriever:
                 merged[c.chunk_id] = c
 
         candidates = list(merged.values())
-        reranker = self._load_reranker()
-        if reranker and reranker is not False:
-            pairs = [[query, c.text] for c in candidates]
-            ce_scores = reranker.predict(pairs)
-            for c, sc in zip(candidates, ce_scores, strict=False):
-                c.score = float(sc)
-            candidates.sort(key=lambda x: x.score, reverse=True)
-            return candidates[: s.rerank_top_n]
-
-        # Without reranker: sort by fused normalised score
         candidates.sort(key=lambda x: x.score, reverse=True)
         return candidates[: s.rerank_top_n]
 
