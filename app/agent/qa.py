@@ -27,7 +27,9 @@ def answer_kb(
     hits = r.retrieve(user_text)
 
     context_blocks = []
-    citations = []
+    _seen_urls: dict[str, int] = {}   # url → index of best citation so far
+    citations: list[dict] = []
+
     for h in hits:
         context_blocks.append(
             f"SOURCE_TITLE: {h.article_title}\n"
@@ -35,15 +37,30 @@ def answer_kb(
             f"URL: {h.canonical_url}\n"
             f"TEXT:\n{h.text}\n",
         )
-        citations.append(
-            {
-                "article_title": h.article_title,
-                "section_title": h.section_title,
-                "url": h.canonical_url,
-                "excerpt": h.text[:400],
-                "score": h.score,
-            },
-        )
+        url = h.canonical_url or ""
+        if url and url in _seen_urls:
+            # Same article URL already in citations — keep the higher-scoring entry
+            prev_idx = _seen_urls[url]
+            if h.score > citations[prev_idx]["score"]:
+                citations[prev_idx] = {
+                    "article_title": h.article_title,
+                    "section_title": h.section_title,
+                    "url": url,
+                    "excerpt": h.text[:400],
+                    "score": h.score,
+                }
+        else:
+            _seen_urls[url] = len(citations)
+            citations.append(
+                {
+                    "article_title": h.article_title,
+                    "section_title": h.section_title,
+                    "url": url,
+                    "excerpt": h.text[:400],
+                    "score": h.score,
+                },
+            )
+
     context = "\n---\n".join(context_blocks)[:11000]
 
     # Build user prompt — include conversation history for follow-up awareness
@@ -54,7 +71,7 @@ def answer_kb(
     try:
         out = client.chat_json(
             [{"role": "system", "content": KB_QA_SYSTEM}, {"role": "user", "content": user_prompt}],
-            temperature=0.2,
+            temperature=0.1,   # deterministic — same question → same answer
         )
         conf = float(out.get("confidence", 0.5))
         concise = str(out.get("concise_answer", "")).strip()

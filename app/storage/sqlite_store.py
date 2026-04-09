@@ -194,6 +194,24 @@ class SqliteStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def search_tickets_by_email(self, email: str, limit: int = 5) -> list[dict[str, Any]]:
+        """Find tickets across all sessions by the submitter's email address."""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM tickets WHERE lower(email)=lower(?) ORDER BY created_at DESC LIMIT ?",
+                (email.strip(), limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_ticket(self, ticket_id: str) -> dict[str, Any] | None:
+        """Fetch a single ticket by its ID (TCK-…)."""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT * FROM tickets WHERE lower(ticket_id)=lower(?)",
+                (ticket_id.strip(),),
+            ).fetchone()
+        return dict(row) if row else None
+
     def upsert_recovery(
         self,
         case_id: str | None,

@@ -29,6 +29,14 @@ _ASSET_PATTERN = re.compile(
     re.I,
 )
 _EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
+# Detects queries about existing tickets OR cases (same object, just different user terminology)
+_TICKET_LOOKUP_PAT = re.compile(
+    r"\b(my|show|check|find|what|view|see)\b.{0,40}\b(ticket|case)s?\b"
+    r"|\b(ticket|case)s?\b.{0,40}\b(status|id|number|created?|did\s+i|i\s+(created?|made|opened?|submitted?))\b"
+    r"|\b(what|which)\s+(ticket|case)\b"
+    r"|\b(ticket|case)\s+i\s+(created?|submitted?|opened?|made)\b",
+    re.IGNORECASE,
+)
 
 
 def _scan_history_for_slot(msgs: list[dict[str, Any]], pattern: re.Pattern) -> str:
@@ -46,13 +54,18 @@ def _load_partial_state(msgs: list[dict[str, Any]], action_name: str) -> dict[st
 
     Walks the ENTIRE history (not just the last message) so state survives
     multiple clarify rounds without being lost.
+
+    Only loads state from genuine "needs more info" clarify turns, never from terminal
+    statuses like "not_found", "ok", or bare "error" with no missing fields.
     """
     for m in reversed(msgs):
         if m.get("role") != "assistant":
             continue
         meta = m.get("meta") or {}
         action = meta.get("action") or {}
-        if action.get("name") == action_name and meta.get("status") in ("clarify", "error"):
+        status = meta.get("status", "")
+        # Only restore state from turns that were genuinely mid-collection
+        if action.get("name") == action_name and status == "clarify" and action.get("missing"):
             return dict(action.get("state") or {})
     return {}
 
@@ -228,13 +241,25 @@ def _last_assistant_meta(messages: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _pending_action(messages: list[dict[str, Any]]) -> tuple[str, list[str]]:
-    """Return (action_name, missing_fields) if the last assistant turn was a clarify for an action."""
+    """Return (action_name, missing_fields) if the last assistant turn is awaiting user input.
+
+    Only returns a non-empty name when:
+    - status is "clarify"  (asking for missing info)
+    - AND there are actual missing fields listed
+
+    Terminal statuses like "not_found", "ok", "error" (with no missing list) are ignored
+    so the agent never gets stuck re-running the same action after a conclusive result.
+    """
     meta = _last_assistant_meta(messages)
     if meta.get("status") != "clarify":
         return "", []
     action = meta.get("action") or {}
     name = action.get("name", "")
     missing = list(action.get("missing") or [])
+    # No missing fields = this clarify was a "soft" message (e.g., not_found with status=clarify);
+    # treat it as terminal so the next user turn is routed freely.
+    if not missing:
+        return "", []
     return name, missing
 
 
@@ -295,26 +320,38 @@ def node_dispatch(state: AgentState) -> AgentState:
             )
             return {"response": resp.model_dump()}
 
-    if any(p in ul for p in ("what issue type", "which issue type", "issue type did i")):
-        tickets = get_store().recent_tickets(sid, limit=3)
+    # ── Ticket / case lookup ────────────────────────────────────────
+    # "ticket" and "case" are the same object — always display as "support ticket".
+    if _TICKET_LOOKUP_PAT.search(ul):
+        store = get_store()
+        tickets = store.recent_tickets(sid, limit=5)
+        # If no tickets in this session, try email-based cross-session lookup
+        if not tickets:
+            email_hit = _scan_history_for_slot(msgs, _EMAIL_PATTERN)
+            if not email_hit:
+                em = _EMAIL_PATTERN.search(ul)
+                email_hit = em.group(0) if em else ""
+            if email_hit:
+                tickets = store.search_tickets_by_email(email_hit, limit=5)
         if tickets:
-            lines = [f"- `{t['ticket_id']}` → **{t['issue_type']}**" for t in tickets]
-            resp = AgentResponse(
-                session_id=sid,
-                message="Here’s what we have on file for tickets in this session:\n\n" + "\n".join(lines),
-                intent=Intent.ACTION_CREATE_TICKET.value,
-                status="ok",
-                action={"name": "ticket_issue_recall", "payload": tickets},
+            _lines = []
+            for t in tickets:
+                it_disp = t.get("issue_type", "").replace("_", " ").title()
+                date    = (t.get("created_at") or "")[:10]
+                email   = t.get("email", "")
+                _lines.append(
+                    f"- **`{t['ticket_id']}`** · {it_disp}"
+                    + (f" · {email}" if email else "")
+                    + (f" · submitted {date}" if date else "")
+                )
+            msg = (
+                "Here are your support tickets:\n\n"
+                + "\n".join(_lines)
+                + "\n\nLet me know if you need anything else!"
             )
-            return {"response": resp.model_dump()}
-
-    if any(p in ul for p in ("ticket did i", "ticket i created", "my support ticket", "last ticket")):
-        tickets = get_store().recent_tickets(sid, limit=5)
-        if tickets:
-            lines = [f"- `{t['ticket_id']}` — {t['issue_type']} — {t['created_at']}" for t in tickets]
             resp = AgentResponse(
                 session_id=sid,
-                message="Here are your recent tickets in this session:\n\n" + "\n".join(lines),
+                message=msg,
                 intent=Intent.ACTION_CREATE_TICKET.value,
                 status="ok",
                 action={"name": "ticket_recall", "payload": tickets},
@@ -322,7 +359,11 @@ def node_dispatch(state: AgentState) -> AgentState:
             return {"response": resp.model_dump()}
         resp = AgentResponse(
             session_id=sid,
-            message="I don’t see a support ticket created in this session yet. Tell me your issue and email if you’d like to open one.",
+            message=(
+                "I don't see any support tickets linked to this session. "
+                "If you'd like to open one, just share your issue type, email address, "
+                "and a brief description — I'll take care of the rest!"
+            ),
             intent=Intent.ACTION_CREATE_TICKET.value,
             status="clarify",
         )
@@ -346,44 +387,65 @@ def node_dispatch(state: AgentState) -> AgentState:
             intent = Intent.AMBIGUOUS
     slots = dict(route_data.get("slots") or {})
 
-    # Override router if it mis-classified a follow-up to an in-progress action
+    # Override router if it mis-classified a follow-up to an in-progress action.
+    # CRITICAL: only override when there are actual MISSING fields (_pending_missing is non-empty).
+    # If _pending_missing is empty the previous turn was a terminal result (not_found, error, ok)
+    # and the user's next message should be routed freely by the LLM router.
     _safe_intents = {Intent.UNSAFE, Intent.SECURITY_SENSITIVE, Intent.OUT_OF_SCOPE}
-    if pending_act == "check_transaction" and intent not in _safe_intents:
+    if pending_act == "check_transaction" and _pending_missing and intent not in _safe_intents:
         tx_try, asset_try = _extract_tx_slots(user, slots, msgs)
         if tx_try or asset_try:
             intent = Intent.ACTION_CHECK_TRANSACTION
-    elif pending_act == "create_ticket" and intent not in _safe_intents:
+    elif pending_act == "create_ticket" and _pending_missing and intent not in _safe_intents:
         _, email_try, _ = _extract_ticket_slots(user, slots, msgs)
         if email_try or (intent not in (Intent.KB_QA,) and len(user.strip()) > 3):
             intent = Intent.ACTION_CREATE_TICKET
-    elif pending_act == "account_recovery" and intent not in _safe_intents:
+    elif pending_act == "account_recovery" and _pending_missing and intent not in _safe_intents:
         if intent != Intent.KB_QA:
             intent = Intent.ACTION_ACCOUNT_RECOVERY
 
-    if intent in (Intent.UNSAFE, Intent.SECURITY_SENSITIVE):
+    if intent == Intent.SECURITY_SENSITIVE:
         msg = (
-            "I can't help bypass account security, KYC, or fraud protections."
-            if intent == Intent.SECURITY_SENSITIVE
-            else "I can't help with that request."
+            "That's a sensitive area — for everyone's protection I'm not able to help with requests "
+            "that involve bypassing security steps, identity verification, or fraud controls. "
+            "These safeguards exist to keep your account safe.\n\n"
+            "If you're locked out or having trouble with 2FA, I'm happy to walk you through "
+            "Coinbase's official account recovery process. Just say **\"I need account recovery help\"**."
         )
-        resp = AgentResponse(
-            session_id=sid,
-            message=msg,
-            intent=intent.value,
-            status="refusal",
+        resp = AgentResponse(session_id=sid, message=msg, intent=intent.value, status="refusal")
+        return {"response": resp.model_dump()}
+
+    if intent == Intent.UNSAFE:
+        msg = (
+            "I'm not able to help with that one — it falls outside what I'm here for as a "
+            "Coinbase support assistant. If there's something about your Coinbase account, "
+            "transactions, or security I can assist with, I'm all ears!"
         )
+        resp = AgentResponse(session_id=sid, message=msg, intent=intent.value, status="refusal")
         return {"response": resp.model_dump()}
 
     if intent == Intent.OUT_OF_SCOPE:
-        resp = AgentResponse(
-            session_id=sid,
-            message=(
-                "I'm focused on **Coinbase customer support** topics (account access, security, "
-                "transactions, fees, and getting started). Try asking about one of those areas."
+        # Rotate across a few warm, natural-sounding redirects based on session turn count
+        _oos_msgs = [
+            (
+                "Hmm, that one's a bit outside my lane! I'm set up specifically to help with "
+                "Coinbase support — things like account access, transactions, fees, security, "
+                "and getting started with crypto. Can I help you with any of those?"
             ),
-            intent=intent.value,
-            status="refusal",
-        )
+            (
+                "Good question, but not one I can answer well from here — my expertise is "
+                "Coinbase customer support. I can help with things like checking a transaction, "
+                "recovering account access, or explaining Coinbase fees. What would you like to know?"
+            ),
+            (
+                "I wish I could help, but that's a bit beyond my scope as a Coinbase support "
+                "assistant. I'm best at questions about your account, security settings, "
+                "crypto transactions, and Coinbase products. Happy to dig into any of those!"
+            ),
+        ]
+        turn = len(msgs) // 2  # rough turn count
+        msg = _oos_msgs[turn % len(_oos_msgs)]
+        resp = AgentResponse(session_id=sid, message=msg, intent=intent.value, status="refusal")
         return {"response": resp.model_dump()}
 
     # Only ask for clarification when intent IS ambiguous — never gate valid intents on this
@@ -456,12 +518,14 @@ def node_dispatch(state: AgentState) -> AgentState:
             resp = AgentResponse(
                 session_id=sid,
                 message=(
-                    f"I couldn't find transaction **{tx}** ({asset}) in our records. "
-                    "Please check the ID and asset type — or open a support ticket for further help."
+                    f"Sorry, I couldn't find a transaction matching **{tx}** ({asset}) in our records. "
+                    "Please double-check the ID and asset type.\n\n"
+                    "If you think this is an error, I can open a support ticket for you — "
+                    "just say **\"create a ticket\"** and I'll get that started."
                 ),
                 intent=intent.value,
-                status="clarify",
-                action={"name": "check_transaction", "state": {"transaction_id": tx, "asset_type": asset}},
+                status="ok",   # lookup completed (no match) — NOT "clarify", prevents continuation loop
+                action={"name": "check_transaction", "payload": {"found": False, "transaction_id": tx, "asset_type": asset}},
             )
             return {"response": resp.model_dump()}
 

@@ -211,7 +211,20 @@ def render_source_cards(cits: list[dict[str, Any]]) -> None:
             unsafe_allow_html=True,
         )
         return
+    # Deduplicate by URL — keep the highest-scoring entry per unique URL
+    seen_urls: dict[str, dict[str, Any]] = {}
+    deduped: list[dict[str, Any]] = []
     for cit in cits:
+        url = cit.get("url") or cit.get("canonical_url") or ""
+        if url and url in seen_urls:
+            if (cit.get("score") or 0) > (seen_urls[url].get("score") or 0):
+                seen_urls[url].update(cit)   # replace in-place to preserve order
+        elif url:
+            seen_urls[url] = cit
+            deduped.append(cit)
+        else:
+            deduped.append(cit)   # no URL — always include
+    for cit in deduped:
         title   = cit.get("article_title") or "Coinbase Help Article"
         section = cit.get("section_title") or ""
         raw     = cit.get("excerpt") or cit.get("text") or ""
