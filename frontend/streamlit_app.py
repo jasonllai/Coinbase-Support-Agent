@@ -7,13 +7,16 @@ import os
 # Must be set before any FAISS / PyTorch import to prevent macOS libomp conflict
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
+import base64
 import json
 import sys
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
 import streamlit as st
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -23,10 +26,63 @@ from app.agent.graph import run_agent_turn
 from app.core.config import get_settings
 from app.storage.sqlite_store import get_store
 
+# ─── Brand icon ─────────────────────────────────────────────────────────────
+_ICON_PATH = ROOT / "coinbase_icon.png"
+
+def _icon_b64(size: int = 40) -> str:
+    """Return an <img> tag embedding the Coinbase icon at `size` px."""
+    try:
+        img = Image.open(_ICON_PATH).convert("RGBA").resize((size, size), Image.LANCZOS)
+        import io
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        data = base64.b64encode(buf.getvalue()).decode()
+        return (
+            f'<img src="data:image/png;base64,{data}" '
+            f'width="{size}" height="{size}" style="display:block;" />'
+        )
+    except Exception:
+        return "🔵"
+
+def _icon_pil(size: int = 64) -> Image.Image | None:
+    """Return a PIL Image for use in Streamlit widget avatar/page_icon params."""
+    try:
+        return Image.open(_ICON_PATH).convert("RGBA").resize((size, size), Image.LANCZOS)
+    except Exception:
+        return None
+
+def _icon_b64_white(size: int = 34) -> str:
+    """White silhouette of the Coinbase icon — for display on the blue header bar.
+    Detects logo pixels (non-white) via grayscale threshold and recolours them white
+    on a transparent background, so it sits cleanly on any coloured surface."""
+    try:
+        import io as _io
+        img = Image.open(_ICON_PATH).convert("RGBA")
+        gray = img.convert("L")
+        # Logo pixels are the darker (non-white) ones; background is near-white (>220)
+        logo_mask = gray.point(lambda v: 255 if v < 220 else 0, "L")
+        white_layer = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        transparent  = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        result = Image.composite(white_layer, transparent, logo_mask)
+        result = result.resize((size, size), Image.LANCZOS)
+        buf = _io.BytesIO()
+        result.save(buf, format="PNG")
+        data = base64.b64encode(buf.getvalue()).decode()
+        return (
+            f'<img src="data:image/png;base64,{data}" '
+            f'width="{size}" height="{size}" style="display:block;" />'
+        )
+    except Exception:
+        return "🔵"
+
+
+# Pre-load a 48 px avatar used for every assistant chat bubble
+_ASST_AVATAR: Image.Image | str = _icon_pil(48) or "🔵"
+
 # ─── Page config ───────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Coinbase Support",
-    page_icon="🔵",
+    page_icon=_icon_pil(64) or "🔵",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -133,10 +189,19 @@ def _llm_configured() -> bool:
         return False
 
 
-def _fmt_time(iso: str) -> str:
+_TZ_TORONTO = ZoneInfo("America/Toronto")
+
+
+def _fmt_time(iso: str, include_tz: bool = True) -> str:
+    """Parse a UTC ISO timestamp and render it in Toronto local time."""
+    if not iso:
+        return ""
     try:
         dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-        return dt.strftime("%b %d, %H:%M")
+        dt_local = dt.astimezone(_TZ_TORONTO)
+        # %Z gives "EST" / "EDT" automatically
+        fmt = "%b %d, %I:%M %p %Z" if include_tz else "%b %d, %I:%M %p"
+        return dt_local.strftime(fmt)
     except Exception:
         return iso[:16]
 
@@ -167,36 +232,54 @@ def require_auth() -> None:
     if st.session_state.get("_auth_ok"):
         return
     inject_css()
+
+    # Build the icon img tag once (56 px for login card)
+    icon_html = _icon_b64(56)
+
     st.markdown(
         f"""
         <div style="display:flex;flex-direction:column;align-items:center;
-                    justify-content:center;min-height:80vh;text-align:center;">
+                    justify-content:center;min-height:72vh;text-align:center;">
           <div style="background:white;border:1px solid #E2E8F0;border-radius:20px;
-                      padding:48px 40px;max-width:380px;
+                      padding:48px 40px;max-width:400px;width:100%;
                       box-shadow:0 4px 24px rgba(0,0,0,0.07);">
-            <div style="width:56px;height:56px;background:{_BLUE};border-radius:50%;
-                        display:flex;align-items:center;justify-content:center;
-                        margin:0 auto 18px;font-size:26px;">🔵</div>
+            <div style="margin:0 auto 18px;width:56px;height:56px;">
+              {icon_html}
+            </div>
             <h2 style="color:#1E293B;font-size:22px;font-weight:700;margin:0 0 8px;">
               Coinbase Support</h2>
-            <p style="color:#64748B;font-size:14px;margin:0 0 28px;line-height:1.6;">
-              AI-powered support assistant.<br>Enter the access password to continue.</p>
+            <p style="color:#64748B;font-size:14px;margin:0 0 24px;line-height:1.6;">
+              AI-powered support assistant.<br>Sign in to continue.</p>
           </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
     _, c, _ = st.columns([1, 2, 1])
     with c:
-        pw = st.text_input("Password", type="password", label_visibility="collapsed",
-                           placeholder="Enter access password…")
-        if st.button("Continue →", use_container_width=True, type="primary"):
-            expected = os.getenv("DEMO_PASSWORD", get_settings().demo_password)
-            if pw == expected:
-                st.session_state["_auth_ok"] = True
-                st.rerun()
-            else:
+        username = st.text_input(
+            "Username", label_visibility="visible",
+            placeholder="Enter your username…"
+        )
+        pw = st.text_input(
+            "Password", type="password", label_visibility="visible",
+            placeholder="Enter your password…"
+        )
+        if st.button("Sign in →", use_container_width=True, type="primary"):
+            cfg = get_settings()
+            expected_user = os.getenv("DEMO_USERNAME", cfg.demo_username)
+            expected_pw   = os.getenv("DEMO_PASSWORD", cfg.demo_password)
+            if not username.strip():
+                st.error("Please enter your username.")
+            elif username.strip() != expected_user:
+                st.error("Username not recognised. Please try again.")
+            elif pw != expected_pw:
                 st.error("Incorrect password. Please try again.")
+            else:
+                st.session_state["_auth_ok"]   = True
+                st.session_state["_auth_user"]  = username.strip()
+                st.rerun()
     st.stop()
 
 
@@ -288,12 +371,14 @@ def render_action_card(action: dict[str, Any], status: str) -> None:
 
 # ─── Render a single message ───────────────────────────────────────────────
 
-def render_user_msg(content: str) -> None:
+def render_user_msg(content: str, ts: str = "") -> None:
     with st.chat_message("user", avatar="👤"):
         st.markdown(content)
+        if ts:
+            st.caption(_fmt_time(ts))
 
 
-def _render_assistant_body(data: dict[str, Any], debug: bool = False) -> None:
+def _render_assistant_body(data: dict[str, Any], debug: bool = False, ts: str = "") -> None:
     """Render the interior of an assistant message bubble."""
     intent  = data.get("intent", "")
     status  = data.get("status", "ok")
@@ -316,18 +401,21 @@ def _render_assistant_body(data: dict[str, Any], debug: bool = False) -> None:
         with st.expander(f"📎 {len(cits)} Help Center source{'s' if len(cits)!=1 else ''}", expanded=False):
             render_source_cards(cits)
 
+    if ts:
+        st.caption(_fmt_time(ts))
+
     if debug:
         with st.expander("🛠 Debug trace", expanded=False):
             st.json({k: v for k, v in data.items() if k not in ("message", "details")})
 
 
-def render_assistant_msg(data: dict[str, Any], debug: bool = False, _inside_bubble: bool = False) -> None:
+def render_assistant_msg(data: dict[str, Any], debug: bool = False, _inside_bubble: bool = False, ts: str = "") -> None:
     """Render an assistant message, optionally wrapping in a chat_message bubble."""
     if _inside_bubble:
-        _render_assistant_body(data, debug)
+        _render_assistant_body(data, debug, ts=ts)
     else:
-        with st.chat_message("assistant", avatar="🔵"):
-            _render_assistant_body(data, debug)
+        with st.chat_message("assistant", avatar=_ASST_AVATAR):
+            _render_assistant_body(data, debug, ts=ts)
 
 
 # ─── Welcome screen ────────────────────────────────────────────────────────
@@ -363,9 +451,9 @@ def render_sidebar(store) -> None:
         st.markdown(
             f"""
             <div style="display:flex;align-items:center;gap:10px;padding:8px 0 16px;">
-              <div style="width:36px;height:36px;background:{_BLUE};border-radius:50%;
-                          display:flex;align-items:center;justify-content:center;
-                          font-size:18px;flex-shrink:0;">🔵</div>
+              <div style="width:36px;height:36px;flex-shrink:0;">
+                {_icon_b64(36)}
+              </div>
               <div>
                 <div style="font-size:15px;font-weight:700;color:#1E293B;">Coinbase Support</div>
                 <div style="font-size:12px;color:#64748B;">AI-powered assistant</div>
@@ -504,10 +592,12 @@ def main() -> None:
     st.markdown(
         f"""
         <div class="cb-hdr">
-          <span style="font-size:22px;">🔵</span>
+          <div style="width:34px;height:34px;flex-shrink:0;">
+            {_icon_b64_white(34)}
+          </div>
           <div>
             <p class="cb-hdr-t">Coinbase Support Agent</p>
-            <p class="cb-hdr-s">Powered by Coinbase Help Center</p>
+            <p class="cb-hdr-s">Ask me about transactions, account access, security, fees &amp; more</p>
           </div>
         </div>
         """,
@@ -526,8 +616,9 @@ def main() -> None:
         render_welcome()
     else:
         for m in st.session_state.messages:
+            msg_ts = m.get("ts", "")
             if m["role"] == "user":
-                render_user_msg(m["content"])
+                render_user_msg(m["content"], ts=msg_ts)
             else:
                 meta = m.get("meta") or {}
                 render_assistant_msg(
@@ -540,6 +631,7 @@ def main() -> None:
                         "details":   meta.get("details"),
                     },
                     debug=st.session_state.get("_debug", False),
+                    ts=msg_ts,
                 )
 
     # ── 2. Handle new prompt — show user bubble IMMEDIATELY, then process ──
@@ -548,7 +640,7 @@ def main() -> None:
         render_user_msg(prompt)
 
         # Process inside an assistant bubble; spinner shows while waiting
-        with st.chat_message("assistant", avatar="🔵"):
+        with st.chat_message("assistant", avatar=_ASST_AVATAR):
             with st.spinner("Searching Help Center…"):
                 try:
                     resp = run_agent_turn(st.session_state.session_id, prompt)

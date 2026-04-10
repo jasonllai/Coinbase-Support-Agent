@@ -29,6 +29,48 @@ _ASSET_PATTERN = re.compile(
     re.I,
 )
 _EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
+
+# Detects when the user is asking about their own conversation / question history
+_HIST_PAT = re.compile(
+    # "what did I ask / say / write"
+    r"\bwhat\s+did\s+i\s+(ask|say|write|mention)\b"
+    # "what was my question / message / last"
+    r"|\bwhat\s+was\s+my\s+(question|message|last|previous)\b"
+    # "what is the question I asked …"
+    r"|\bwhat\s+is\s+the\s+question\s+i\s+(asked?|said?|mentioned?)\b"
+    # "what have I asked / said / talked about"
+    r"|\bwhat\s+(have\s+i|i\s+have)\s+(asked?|said?|talked?|mentioned?)\b"
+    # "my last / previous / prior question"
+    r"|\bmy\s+(last|previous|prior)\s+(question|message|ask)\b"
+    # "bring back / recall / remind me of the conversation"
+    r"|\b(bring\s+back|recall|remind\s+me(\s+of)?|show\s+me)\b.{0,40}\b(conversation|question|asked?|what\s+i)\b"
+    # "what have we talked about / discussed"
+    r"|\bwhat\s+(have\s+)?we\s+(talked?|discussed?|covered|talked\s+about)\b"
+    # "conversation history / log"
+    r"|\bconversation\s+(history|log|we\s+had|just\s+now)\b"
+    # "the question I asked N turns / conversations before/ago"
+    r"|\bthe\s+question\s+i\s+(asked?|said?).{0,40}\b(ago|before|earlier|back)\b"
+    # generic: N conversations / turns / messages ago  (extended to 35 chars)
+    r"|\b(question|ask|message|conversation)\b.{0,35}\b(ago|before|earlier|back)\b"
+    r"|\b(ago|before|earlier)\b.{0,35}\b(question|ask|message|conversation)\b",
+    re.I,
+)
+
+# Detects when the user is asking about the ASSISTANT's previous reply
+_ASST_RECALL_PAT = re.compile(
+    # "what did you say / reply / replied / answer / tell / respond"
+    r"\bwhat\s+did\s+you\s+(say|reply|replied|answer|answered|respond|responded|tell|told|write|mention)\b"
+    # "what was your reply / answer / response"
+    r"|\bwhat\s+was\s+your\s+(reply|answer|response|last|previous)\b"
+    # "your last / previous reply / answer"
+    r"|\byour\s+(last|previous|prior)\s+(reply|answer|response|message)\b"
+    # "what you said / replied / answered / told me"
+    r"|\bwhat\s+you\s+(said|replied|answered?|told\s+me|wrote)\b"
+    # "repeat / show your last answer"
+    r"|\b(repeat|show)\s+(your\s+)?(last\s+)?(reply|answer|response|message)\b",
+    re.I,
+)
+
 # Detects queries about existing tickets OR cases (same object, just different user terminology)
 _TICKET_LOOKUP_PAT = re.compile(
     r"\b(my|show|check|find|what|view|see)\b.{0,40}\b(ticket|case)s?\b"
@@ -191,7 +233,35 @@ def node_load(state: AgentState) -> AgentState:
 
 
 def node_guard(state: AgentState) -> AgentState:
-    g = run_guardrails(state["user_input"])
+    user_text = state["user_input"]
+    msgs      = state.get("messages", [])
+
+    # Determine whether to skip the LLM safety classifier.
+    # The classifier has NO conversation context; it sees a single message in
+    # isolation and can wrongly block perfectly normal follow-up replies.
+    # We still always run the fast regex prescreen (injection / bypass patterns).
+
+    # 1. Slot-fill reply: user is answering a clarifying question (tx ID, email …)
+    last_meta = _last_assistant_meta(msgs)
+    is_slot_fill = bool(
+        last_meta.get("status") == "clarify"
+        and (last_meta.get("action") or {}).get("name")
+        and (last_meta.get("action") or {}).get("missing")
+    )
+
+    # 2. Conversation history recall: "what did I ask before?", "what did you reply?" …
+    is_history_recall = bool(_HIST_PAT.search(user_text.lower()) or _ASST_RECALL_PAT.search(user_text.lower()))
+
+    # 3. Very short reply (≤ 6 words) right after ANY assistant message — usually
+    #    a terse follow-up ("yes", "ok", "why", "BTC", "tell me more") that the
+    #    classifier frequently mis-classifies.
+    word_count  = len(user_text.split())
+    has_prior   = bool(msgs)
+    is_terse_followup = has_prior and word_count <= 6
+
+    skip_llm = is_slot_fill or is_history_recall or is_terse_followup
+
+    g = run_guardrails(user_text, skip_llm=skip_llm)
     trace = list(state.get("router_trace", []))
     trace.append({"node": "guardrails", "blocked": g.blocked, "category": g.category, "reason": g.reason})
     if g.blocked:
@@ -300,6 +370,154 @@ def node_dispatch(state: AgentState) -> AgentState:
         )
         return {"response": resp.model_dump()}
 
+    # ── Conversation history recall ───────────────────────────────────────────
+    # Handles three modes:
+    #   1. User asks about their own prior question(s)  → _HIST_PAT
+    #   2. User asks about the assistant's last reply   → _ASST_RECALL_PAT
+    #   3. User asks about BOTH ("my question and your answer") → both patterns match
+    _ORDINALS = {
+        "last": 1, "previous": 1, "prior": 1,
+        "one": 1, "first": 1,
+        "two": 2, "second": 2,
+        "three": 3, "third": 3,
+        "four": 4, "fourth": 4,
+        "five": 5, "fifth": 5,
+    }
+
+    wants_user_q = bool(_HIST_PAT.search(ul))
+    wants_asst_a = bool(_ASST_RECALL_PAT.search(ul))
+
+    if wants_user_q or wants_asst_a:
+        past_user_msgs = [m["content"] for m in msgs if m.get("role") == "user" and m.get("content")]
+        past_asst_msgs = [m["content"] for m in msgs if m.get("role") == "assistant" and m.get("content")]
+
+        if not past_user_msgs and not past_asst_msgs:
+            resp = AgentResponse(
+                session_id=sid,
+                message=(
+                    "This is actually the start of our conversation — nothing to look back on yet! "
+                    "Feel free to ask anything about Coinbase."
+                ),
+                intent=Intent.KB_QA.value,
+                status="ok",
+            )
+            return {"response": resp.model_dump()}
+
+        # Resolve ordinal offset (1 = most recent, 2 = second-to-last, …)
+        target_idx: int | None = None
+        for word, offset in _ORDINALS.items():
+            if re.search(rf"\b{word}\b", ul):
+                target_idx = offset
+                break
+        num_m = re.search(r"\b(\d+)\b", ul)
+        if num_m:
+            target_idx = int(num_m.group(1))
+
+        parts: list[str] = []
+
+        # --- User question part ---
+        if wants_user_q and past_user_msgs:
+            if target_idx is not None and 1 <= target_idx <= len(past_user_msgs):
+                q = past_user_msgs[-target_idx]
+                label = {1: "last", 2: "second-to-last", 3: "third-to-last"}.get(
+                    target_idx, f"{target_idx} turns ago"
+                )
+                parts.append(f"**Your {label} question:**\n> {q}")
+            elif not wants_asst_a:
+                # No ordinal + only asking about questions → show full list
+                recent = list(reversed(past_user_msgs[-8:]))
+                lines = [f"{i + 1}. {q[:120]}{'…' if len(q) > 120 else ''}" for i, q in enumerate(recent)]
+                parts.append(
+                    "Here are your questions from this session (most recent first):\n\n"
+                    + "\n".join(lines)
+                )
+            else:
+                # Combined "question + answer" request with no ordinal → use most recent pair
+                parts.append(f"**Your last question:**\n> {past_user_msgs[-1]}")
+
+        # --- Assistant answer part ---
+        if wants_asst_a and past_asst_msgs:
+            if target_idx is not None and 1 <= target_idx <= len(past_asst_msgs):
+                a = past_asst_msgs[-target_idx]
+            else:
+                a = past_asst_msgs[-1]
+            # Trim very long answers to keep the recall response readable
+            a_display = a[:600].strip() + ("…" if len(a) > 600 else "")
+            parts.append(f"**My last answer:**\n{a_display}")
+
+        msg_text = "\n\n".join(parts) if parts else (
+            "I don't have a prior exchange to show — this is the start of our session."
+        )
+
+        resp = AgentResponse(
+            session_id=sid,
+            message=msg_text,
+            intent=Intent.KB_QA.value,
+            status="ok",
+        )
+        return {"response": resp.model_dump()}
+
+    # ── Prior action-result recall ────────────────────────────────────────────
+    # "what was my recovery case?" / "show me my transaction result" / "what happened with my tx?"
+    _RECALL_RECOVERY = re.compile(
+        r"\b(my|the)\s+(recovery\s+(case|request)|account\s+recovery)\b"
+        r"|\b(recovery|case)\s+(id|number|status|result)\b"
+        r"|\bwhat.{0,20}(recovery|case)\b",
+        re.I,
+    )
+    _RECALL_TX = re.compile(
+        r"\b(what|show|tell).{0,30}(transaction|tx|transfer)\b"
+        r"|\b(transaction|tx|transfer).{0,20}(result|status|detail|i checked)\b",
+        re.I,
+    )
+    if _RECALL_RECOVERY.search(ul):
+        st = get_store().load_recovery_for_session(sid)
+        if st:
+            cid  = st.get("case_id", "—")
+            sub  = (st.get("issue_subtype") or "unknown").replace("_", " ")
+            em   = st.get("email", "")
+            resp = AgentResponse(
+                session_id=sid,
+                message=(
+                    f"Here's your account recovery request from this session:\n\n"
+                    f"- **Case ID:** `{cid}`\n"
+                    f"- **Issue:** {sub.title()}\n"
+                    + (f"- **Email:** {em}\n" if em else "")
+                    + "\nLet me know if you need anything else!"
+                ),
+                intent=Intent.ACTION_ACCOUNT_RECOVERY.value,
+                status="ok",
+                action={"name": "account_recovery_recall", "payload": st},
+            )
+            return {"response": resp.model_dump()}
+
+    if _RECALL_TX.search(ul):
+        # Find the most recent successful transaction check in message history
+        for m in reversed(msgs):
+            if m.get("role") != "assistant":
+                continue
+            act = (m.get("meta") or {}).get("action") or {}
+            payload = act.get("payload") or {}
+            if act.get("name") == "check_transaction" and payload.get("found"):
+                tx_r  = payload.get("transaction_id", "—")
+                ast_r = payload.get("asset_type", "—")
+                st_r  = payload.get("status", "—").title()
+                dtl   = payload.get("detail", "")
+                resp = AgentResponse(
+                    session_id=sid,
+                    message=(
+                        f"Here's the transaction I looked up earlier:\n\n"
+                        f"- **ID:** `{tx_r}`\n"
+                        f"- **Asset:** {ast_r}\n"
+                        f"- **Status:** {st_r}\n"
+                        + (f"\n{dtl}" if dtl else "")
+                    ),
+                    intent=Intent.ACTION_CHECK_TRANSACTION.value,
+                    status="ok",
+                    action={"name": "check_transaction", "payload": payload},
+                )
+                return {"response": resp.model_dump()}
+
     if "continue" in ul and "recover" in ul:
         st = get_store().load_recovery_for_session(sid)
         if st:
@@ -334,10 +552,21 @@ def node_dispatch(state: AgentState) -> AgentState:
             if email_hit:
                 tickets = store.search_tickets_by_email(email_hit, limit=5)
         if tickets:
+            from zoneinfo import ZoneInfo as _ZI
+            from datetime import datetime as _dt, timezone as _tz
+            _TOR = _ZI("America/Toronto")
+
+            def _fmt_ticket_ts(iso: str) -> str:
+                try:
+                    d = _dt.fromisoformat(iso.replace("Z", "+00:00")).astimezone(_TOR)
+                    return d.strftime("%b %d %Y, %I:%M %p %Z")
+                except Exception:
+                    return iso[:10]
+
             _lines = []
             for t in tickets:
                 it_disp = t.get("issue_type", "").replace("_", " ").title()
-                date    = (t.get("created_at") or "")[:10]
+                date    = _fmt_ticket_ts(t.get("created_at") or "")
                 email   = t.get("email", "")
                 _lines.append(
                     f"- **`{t['ticket_id']}`** · {it_disp}"
@@ -670,30 +899,73 @@ def node_dispatch(state: AgentState) -> AgentState:
         return {"response": resp.model_dump()}
 
     if intent == Intent.ACTION_ONBOARDING_SUPPORT:
-        plan = onboarding_plan(
-            slots.get("new_to_crypto"),
-            slots.get("goal"),
-            slots.get("region"),
-            user,
-        )
+        # Validate + normalise the goal slot
+        _VALID_GOALS = {"buy_crypto", "security", "verification", "deposit", "sell_crypto", "general"}
+        raw_goal = str(slots.get("goal") or "").strip().lower().replace(" ", "_")
+        goal_val = raw_goal if raw_goal in _VALID_GOALS else (slots.get("goal") or None)
+
+        new_to_crypto = str(slots.get("new_to_crypto") or "unknown").strip().lower()
+        if new_to_crypto not in ("yes", "no", "unknown"):
+            new_to_crypto = "unknown"
+
+        try:
+            plan = onboarding_plan(new_to_crypto, goal_val, slots.get("region"), user)
+        except Exception:
+            log.exception("onboarding_plan failed")
+            plan = {
+                "ok": True,
+                "plan": {
+                    "summary": (
+                        "Happy to help you get started! Here's a quick checklist to kick things off safely."
+                    ),
+                    "first_steps": [
+                        "Create your Coinbase account with a strong, unique password.",
+                        "Enable two-factor authentication (2FA) right away.",
+                        "Complete identity verification when prompted.",
+                    ],
+                    "security_tips": [
+                        "Never share your seed phrase or one-time SMS codes with anyone.",
+                        "Watch for phishing sites that look like Coinbase — always check the URL.",
+                    ],
+                    "verification_guidance": [
+                        "Use a well-lit photo of a government-issued ID and make sure your legal name matches.",
+                    ],
+                    "next_actions": [
+                        "Add a payment method in the Payments settings.",
+                        "Make a small test purchase to get comfortable with the flow.",
+                    ],
+                    "suggested_kb_questions": [
+                        "How do I enable 2FA on Coinbase?",
+                        "What documents are needed for ID verification?",
+                        "How do Coinbase fees work?",
+                    ],
+                },
+                "citations": [],
+            }
+
         p = plan["plan"]
-        summary = str(p.get("summary", ""))
-        details = "\n".join(
-            [
-                "**First steps**",
-                *[f"- {x}" for x in p.get("first_steps", [])],
-                "",
-                "**Security**",
-                *[f"- {x}" for x in p.get("security_tips", [])],
-                "",
-                "**Verification**",
-                *[f"- {x}" for x in p.get("verification_guidance", [])],
+        summary = str(p.get("summary", "Here's your personalised onboarding plan!"))
+
+        # Build details only from non-empty sections
+        detail_parts: list[str] = []
+        if p.get("first_steps"):
+            detail_parts += ["**First steps**", *[f"- {x}" for x in p["first_steps"]], ""]
+        if p.get("security_tips"):
+            detail_parts += ["**Security tips**", *[f"- {x}" for x in p["security_tips"]], ""]
+        if p.get("verification_guidance"):
+            detail_parts += ["**Verification**", *[f"- {x}" for x in p["verification_guidance"]], ""]
+        if p.get("next_actions"):
+            detail_parts += ["**Next actions**", *[f"- {x}" for x in p["next_actions"]], ""]
+        if p.get("suggested_kb_questions"):
+            detail_parts += [
+                "**You might also want to know:**",
+                *[f"- {q}" for q in p["suggested_kb_questions"]],
             ]
-        )
+
         resp = AgentResponse(
             session_id=sid,
             message=summary,
-            details=details,
+            details="\n".join(detail_parts).strip() or None,
             intent=intent.value,
             status="ok",
             citations=plan.get("citations", []),
@@ -757,13 +1029,17 @@ def node_dispatch(state: AgentState) -> AgentState:
 
 
 def node_persist(state: AgentState) -> AgentState:
+    from datetime import datetime, timezone as _tz  # local import avoids circular risk
+    _now_utc = datetime.now(_tz.utc).isoformat()
+
     store = get_store()
     sid = state["session_id"]
     resp = state.get("response") or {}
-    user_msg = {"role": "user", "content": state["user_input"], "meta": {}}
+    user_msg = {"role": "user", "content": state["user_input"], "meta": {}, "ts": _now_utc}
     asst_msg = {
         "role": "assistant",
         "content": resp.get("message", ""),
+        "ts": _now_utc,
         "meta": {
             "intent":    resp.get("intent"),
             "status":    resp.get("status"),   # ← needed for continuation detection
@@ -817,8 +1093,8 @@ def run_agent_turn(session_id: str | None, user_input: str) -> AgentResponse:
         return AgentResponse(
             session_id=sid,
             message=(
-                "Something went wrong while processing your request. Please try again in a moment. "
-                "If the problem persists, check that the LLM endpoint is reachable and the KB index is built."
+                "Sorry, something went wrong on my end — please try again in a moment. "
+                "If the issue keeps happening, feel free to open a support ticket and our team will help."
             ),
             intent=Intent.AMBIGUOUS.value,
             status="error",

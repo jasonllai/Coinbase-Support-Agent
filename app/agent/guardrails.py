@@ -44,10 +44,22 @@ INVESTMENT_PATTERNS = [
     r"investment advice",
 ]
 
+# Additional critical patterns caught by regex even if LLM classifier is unavailable.
+# These cover indirect/obfuscated injection attempts the basic list might miss.
+_CRITICAL_INJECTION_EXTRAS = [
+    r"forget (everything|all) (you|i) (told|said|know)",
+    r"(new|different) (persona|personality|role|identity)",
+    r"act (as|like) (a )?(different|unrestricted|uncensored|evil|hacked|dan)",
+    r"do anything now",
+    r"(ignore|skip|override) (your )?(safety|guardrails?|rules?|filters?|restrictions?)",
+    r"pretend (you are|you're|to be) (not |un)?restricted",
+    r"(escape|break out of|get out of) (your )?(sandbox|restrictions?|constraints?)",
+]
+
 
 def prescreen_rules(user_text: str) -> GuardrailResult | None:
     t = user_text.lower()
-    for pat in INJECTION_PATTERNS:
+    for pat in INJECTION_PATTERNS + _CRITICAL_INJECTION_EXTRAS:
         if re.search(pat, t, re.I):
             return GuardrailResult(
                 blocked=True,
@@ -110,6 +122,9 @@ def llm_safety_screen(user_text: str) -> GuardrailResult:
         )
     except Exception as e:
         log.warning("llm safety screen failed: %s", e)
+        # Fail-open for normal queries (don't block legit support questions when classifier is down).
+        # The regex prescreen already catches all critical injection/bypass patterns,
+        # so this path only runs for messages that passed that hard filter.
         return GuardrailResult(
             blocked=False,
             category="ok",
@@ -118,11 +133,24 @@ def llm_safety_screen(user_text: str) -> GuardrailResult:
         )
 
 
-def run_guardrails(user_text: str) -> GuardrailResult:
+def run_guardrails(user_text: str, skip_llm: bool = False) -> GuardrailResult:
+    """Run guardrails on user_text.
+
+    Args:
+        user_text: The raw user message.
+        skip_llm:  If True, skip the LLM safety classifier and only run the fast
+                   regex prescreen.  Use when the user is obviously answering a
+                   slot-filling clarifying question (e.g. providing a transaction ID
+                   or email address) — in those cases the LLM classifier has no
+                   conversation context and can incorrectly block short/cryptic replies.
+    """
     hit = prescreen_rules(user_text)
     if hit:
         log.info("guardrail_block prescreen %s", hit.category)
         return hit
+    if skip_llm:
+        log.debug("guardrail llm skipped (slot_fill context)")
+        return GuardrailResult(blocked=False, category="ok", reason="slot_fill_skip", user_message="")
     llm_hit = llm_safety_screen(user_text)
     if llm_hit.blocked:
         log.info("guardrail_block llm %s", llm_hit.category)

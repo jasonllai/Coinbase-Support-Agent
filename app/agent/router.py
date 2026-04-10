@@ -49,11 +49,15 @@ def classify_intent(user_text: str, recent_context: str) -> RouterOutput:
         )
     except Exception as e:
         log.warning("router failed: %s", e)
-        # Fall through to KB_QA so the retriever still attempts an answer.
-        # Do NOT set clarifying_question — that would suppress the RAG path.
+        # Route to AMBIGUOUS so the agent asks the user to clarify rather than
+        # sending a potentially irrelevant KB query or misrouting an action request.
         return RouterOutput(
-            intent=Intent.KB_QA,
-            confidence=0.3,
+            intent=Intent.AMBIGUOUS,
+            confidence=0.0,
             rationale="router_fallback_llm_unavailable",
+            clarifying_question=(
+                "I had a moment of trouble understanding that — could you rephrase "
+                "what you need help with on Coinbase?"
+            ),
             slots={},
         )
