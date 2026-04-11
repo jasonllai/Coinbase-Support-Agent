@@ -19,18 +19,78 @@ def validate_email(email: str) -> bool:
 
 
 def normalize_issue_type(raw: str) -> str | None:
-    r = raw.strip().lower().replace(" ", "_")
+    r = raw.strip().lower().replace(" ", "_").replace("-", "_")
     if r in ISSUE_TYPES:
         return r
-    aliases = {
+    aliases: dict[str, str] = {
+        # account_access
         "login": "account_access",
+        "sign_in": "account_access",
+        "signin": "account_access",
         "locked": "account_access",
-        "2fa": "security",
-        "fraud": "security",
+        "account_locked": "account_access",
+        "restricted": "account_access",
+        "account_restricted": "account_access",
+        "restriction": "account_access",
+        "account_restriction": "account_access",
+        "suspended": "account_access",
+        "banned": "account_access",
+        "access": "account_access",
+        "can't_log_in": "account_access",
+        "cannot_login": "account_access",
+        # verification
+        "kyc": "verification",
+        "identity": "verification",
+        "id": "verification",
+        "identity_verification": "verification",
+        "id_verification": "verification",
+        "verify": "verification",
+        "document": "verification",
+        "photo_id": "verification",
+        "passport": "verification",
+        "selfie": "verification",
+        # transactions
+        "transaction": "transactions",
+        "transfer": "transactions",
         "withdraw": "transactions",
+        "withdrawal": "transactions",
         "deposit": "transactions",
+        "send": "transactions",
+        "receive": "transactions",
+        "payment": "transactions",
+        "buy": "transactions",
+        "sell": "transactions",
+        "purchase": "transactions",
+        "crypto": "transactions",
+        "pending": "transactions",
+        # security
+        "2fa": "security",
+        "two_factor": "security",
+        "two-factor": "security",
+        "fraud": "security",
+        "hack": "security",
+        "hacked": "security",
+        "compromised": "security",
+        "phishing": "security",
+        "suspicious": "security",
+        "unauthorised": "security",
+        "unauthorized": "security",
+        "scam": "security",
+        # fees
+        "fee": "fees",
+        "charge": "fees",
+        "billing": "fees",
+        "cost": "fees",
+        "price": "fees",
+        "spread": "fees",
     }
-    return aliases.get(r)
+    if r in aliases:
+        return aliases[r]
+    # Partial / substring match: pick the first alias whose key is a substring of r
+    for key, val in aliases.items():
+        if key in r:
+            return val
+    return None
 
 
 def create_ticket(session_id: str, issue_type: str, email: str, problem_description: str) -> dict:

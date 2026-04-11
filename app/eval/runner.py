@@ -24,24 +24,45 @@ def load_cases() -> list[dict]:
 def _check_expect(last, exp: dict) -> tuple[bool, list[str]]:
     ok = True
     reasons: list[str] = []
+    msg = last.message or ""
+
+    # ── Intent checks ──────────────────────────────────────────────────────
     if "intent" in exp and last.intent != exp["intent"]:
         ok = False
         reasons.append(f"intent want {exp['intent']} got {last.intent}")
+    if "intent_any" in exp and last.intent not in exp["intent_any"]:
+        ok = False
+        reasons.append(f"intent want one of {exp['intent_any']} got {last.intent}")
+
+    # ── Status checks ──────────────────────────────────────────────────────
     if "status" in exp and last.status != exp["status"]:
         ok = False
         reasons.append(f"status want {exp['status']} got {last.status}")
     if "status_not" in exp and last.status == exp["status_not"]:
         ok = False
         reasons.append(f"status should not be {exp['status_not']}")
-    if "substring" in exp and exp["substring"] not in (last.message or ""):
-        ok = False
-        reasons.append("substring missing in message")
-    if "last_substring" in exp and exp["last_substring"] not in (last.message or ""):
-        ok = False
-        reasons.append("last_substring missing")
     if "last_status" in exp and last.status != exp["last_status"]:
         ok = False
         reasons.append(f"last_status want {exp['last_status']} got {last.status}")
+    if "status_any" in exp and last.status not in exp["status_any"]:
+        ok = False
+        reasons.append(f"status want one of {exp['status_any']} got {last.status}")
+
+    # ── Substring checks (case-sensitive and case-insensitive) ────────────
+    if "substring" in exp and exp["substring"] not in msg:
+        ok = False
+        reasons.append(f"substring '{exp['substring']}' missing in message")
+    if "substring_ci" in exp and exp["substring_ci"].lower() not in msg.lower():
+        ok = False
+        reasons.append(f"substring_ci '{exp['substring_ci']}' missing (case-insensitive)")
+    if "last_substring" in exp and exp["last_substring"] not in msg:
+        ok = False
+        reasons.append(f"last_substring '{exp['last_substring']}' missing")
+    if "last_substring_ci" in exp and exp["last_substring_ci"].lower() not in msg.lower():
+        ok = False
+        reasons.append(f"last_substring_ci '{exp['last_substring_ci']}' missing (case-insensitive)")
+
+    # ── Citation check ─────────────────────────────────────────────────────
     if exp.get("citations_nonempty") is True and not (last.citations or []):
         ok = False
         reasons.append("expected citations on last turn")

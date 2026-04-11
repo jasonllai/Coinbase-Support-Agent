@@ -71,6 +71,20 @@ _ASST_RECALL_PAT = re.compile(
     re.I,
 )
 
+# Module-level recall patterns used in BOTH node_guard (to skip LLM classifier)
+# and node_dispatch (to short-circuit before intent-based routing).
+_RECALL_RECOVERY_PAT = re.compile(
+    r"\b(my|the)\s+(recovery\s+(case|request)|account\s+recovery)\b"
+    r"|\b(recovery|case)\s+(id|number|status|result)\b"
+    r"|\bwhat.{0,30}(recovery|case)\s*(id|number)?\b",
+    re.I,
+)
+_RECALL_TX_PAT = re.compile(
+    r"\b(what|show|tell).{0,30}(transaction|tx|transfer)\b"
+    r"|\b(transaction|tx|transfer).{0,20}(result|status|detail|i checked)\b",
+    re.I,
+)
+
 # Detects queries about existing tickets OR cases (same object, just different user terminology)
 _TICKET_LOOKUP_PAT = re.compile(
     r"\b(my|show|check|find|what|view|see)\b.{0,40}\b(ticket|case)s?\b"
@@ -249,8 +263,15 @@ def node_guard(state: AgentState) -> AgentState:
         and (last_meta.get("action") or {}).get("missing")
     )
 
-    # 2. Conversation history recall: "what did I ask before?", "what did you reply?" …
-    is_history_recall = bool(_HIST_PAT.search(user_text.lower()) or _ASST_RECALL_PAT.search(user_text.lower()))
+    # 2. Conversation history recall or prior action-result recall queries — these are
+    #    safe requests for session memory, never security-sensitive.
+    _ul = user_text.lower()
+    is_history_recall = bool(
+        _HIST_PAT.search(_ul)
+        or _ASST_RECALL_PAT.search(_ul)
+        or _RECALL_RECOVERY_PAT.search(_ul)
+        or _RECALL_TX_PAT.search(_ul)
+    )
 
     # 3. Very short reply (≤ 6 words) right after ANY assistant message — usually
     #    a terse follow-up ("yes", "ok", "why", "BTC", "tell me more") that the
@@ -458,19 +479,9 @@ def node_dispatch(state: AgentState) -> AgentState:
         return {"response": resp.model_dump()}
 
     # ── Prior action-result recall ────────────────────────────────────────────
-    # "what was my recovery case?" / "show me my transaction result" / "what happened with my tx?"
-    _RECALL_RECOVERY = re.compile(
-        r"\b(my|the)\s+(recovery\s+(case|request)|account\s+recovery)\b"
-        r"|\b(recovery|case)\s+(id|number|status|result)\b"
-        r"|\bwhat.{0,20}(recovery|case)\b",
-        re.I,
-    )
-    _RECALL_TX = re.compile(
-        r"\b(what|show|tell).{0,30}(transaction|tx|transfer)\b"
-        r"|\b(transaction|tx|transfer).{0,20}(result|status|detail|i checked)\b",
-        re.I,
-    )
-    if _RECALL_RECOVERY.search(ul):
+    # Uses module-level patterns (_RECALL_RECOVERY_PAT / _RECALL_TX_PAT) so that
+    # node_guard can also skip the LLM safety classifier for these safe queries.
+    if _RECALL_RECOVERY_PAT.search(ul):
         st = get_store().load_recovery_for_session(sid)
         if st:
             cid  = st.get("case_id", "—")
@@ -491,7 +502,7 @@ def node_dispatch(state: AgentState) -> AgentState:
             )
             return {"response": resp.model_dump()}
 
-    if _RECALL_TX.search(ul):
+    if _RECALL_TX_PAT.search(ul):
         # Find the most recent successful transaction check in message history
         for m in reversed(msgs):
             if m.get("role") != "assistant":
@@ -788,8 +799,15 @@ def node_dispatch(state: AgentState) -> AgentState:
         it    = it    or partial_tk.get("issue_type", "")
         email = email or partial_tk.get("email", "")
         desc  = desc  or partial_tk.get("problem_description", "")
-        if not desc or len(desc.strip()) < 12:
-            desc = user  # fall back to full user message as description
+
+        # Only use the full user message as description when it is clearly a
+        # free-form problem report — i.e. it doesn't look like a structured
+        # slot-filling command (no "issue:", "email:", "ticket" keywords).
+        _SLOT_PATTERN = re.compile(
+            r"\b(issue|email|create|open|ticket|case)\s*[:=]", re.I
+        )
+        if (not desc or len(desc.strip()) < 12) and not _SLOT_PATTERN.search(user):
+            desc = user
 
         validation_errors: list[str] = []
         missing_fields: list[str] = []
