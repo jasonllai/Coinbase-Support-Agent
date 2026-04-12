@@ -594,21 +594,7 @@ def render_sidebar(store) -> None:
                 use_container_width=True,
             )
 
-        st.session_state["_debug"] = st.toggle("Debug mode", value=False)
-        st.markdown(
-            '<p style="font-size:11px;color:#94A3B8;margin-top:10px;">'
-            "Educational demo · Not affiliated with Coinbase, Inc.</p>",
-            unsafe_allow_html=True,
-        )
-
-        # Current session badge
-        sid = st.session_state.get("session_id")
-        if sid:
-            st.markdown(
-                f'<p style="font-size:11px;color:#94A3B8;margin:6px 0 2px;">Session</p>'
-                f'<span class="cb-badge">{sid[:20]}…</span>',
-                unsafe_allow_html=True,
-            )
+        st.session_state["_debug"] = False
 
 
 # ─── Main ──────────────────────────────────────────────────────────────────
