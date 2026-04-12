@@ -15,6 +15,8 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
+import html as _html_lib
+
 import streamlit as st
 from PIL import Image
 
@@ -171,6 +173,40 @@ header[data-testid="stHeader"] {{ background:transparent !important; }}
 /* ── Warning banner ── */
 .cb-warn {{ background:#FEF3C7; border:1px solid #FDE68A; border-radius:8px;
             padding:10px 14px; font-size:13px; color:#92400E; margin:0 0 12px 0; }}
+
+/* ── Conversation layout: left = agent, right = user ── */
+
+/* User bubble — rendered as custom HTML, right-aligned */
+.cb-user-bubble-wrap {{
+    display: flex;
+    justify-content: flex-end;
+    margin: 10px 0 2px 0;
+}}
+.cb-user-bubble {{
+    background: {_BLUE};
+    color: white;
+    border-radius: 18px 18px 4px 18px;
+    padding: 11px 16px 10px 16px;
+    max-width: 68%;
+    word-break: break-word;
+    box-shadow: 0 2px 8px rgba(0,82,255,0.15);
+    font-size: 14.5px;
+    line-height: 1.55;
+}}
+.cb-user-bubble p {{ margin: 0; }}
+.cb-user-ts {{
+    font-size: 10.5px;
+    color: rgba(255,255,255,0.62);
+    margin-top: 5px;
+    text-align: right;
+}}
+
+/* Assistant messages — keep st.chat_message on left, constrain width */
+[data-testid="stChatMessage"] {{
+    max-width: 82%;
+    margin-right: auto;
+    padding: 4px 0;
+}}
 </style>
 """
 
@@ -372,10 +408,21 @@ def render_action_card(action: dict[str, Any], status: str) -> None:
 # ─── Render a single message ───────────────────────────────────────────────
 
 def render_user_msg(content: str, ts: str = "") -> None:
-    with st.chat_message("user", avatar="👤"):
-        st.markdown(content)
-        if ts:
-            st.caption(_fmt_time(ts))
+    """Render the user message as a right-aligned blue bubble (custom HTML)."""
+    safe = _html_lib.escape(content).replace("\n", "<br>")
+    ts_html = (
+        f'<div class="cb-user-ts">{_fmt_time(ts)}</div>'
+        if ts else ""
+    )
+    st.markdown(
+        f'<div class="cb-user-bubble-wrap">'
+        f'  <div class="cb-user-bubble">'
+        f'    <p>{safe}</p>'
+        f'    {ts_html}'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def _render_assistant_body(data: dict[str, Any], debug: bool = False, ts: str = "") -> None:
