@@ -83,7 +83,24 @@ docs/             # Architecture, design decisions, demo materials
 
 ---
 
-## Requirements
+## Try it live
+
+A deployed version is publicly accessible — no setup required:
+
+**[https://coinbase-support-agent-jasonllai.streamlit.app/](https://coinbase-support-agent-jasonllai.streamlit.app/)**
+
+| Field | Value |
+|---|---|
+| Username | `coinbase` |
+| Password | `CoinbaseSupport2026!` |
+
+---
+
+## Local setup
+
+To run the agent on your own machine (e.g. to use a different LLM endpoint, rebuild the knowledge base, or run the evaluation suite):
+
+### Requirements
 
 - **Python 3.11 or 3.12**
 - Access to an OpenAI-compatible LLM endpoint (Qwen3-30B-A3B-FP8 or equivalent)
