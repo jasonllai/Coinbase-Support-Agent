@@ -277,9 +277,6 @@ python app/eval/retrieval_eval.py --out data/eval/retrieval_eval.csv
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | System design, data flow, and technical deep-dives |
 | [docs/design_decisions.md](docs/design_decisions.md) | Why specific technologies and approaches were chosen |
-| [docs/demo_script.md](docs/demo_script.md) | Step-by-step demo walkthrough |
-| [docs/demo_transcripts.md](docs/demo_transcripts.md) | Representative conversation examples |
-| [docs/presentation_notes.md](docs/presentation_notes.md) | Talking points for presentations |
 | [docs/team_handoff.md](docs/team_handoff.md) | Module-by-module guide for contributors |
 | [deployment/README.md](deployment/README.md) | Docker and deployment instructions |
 
