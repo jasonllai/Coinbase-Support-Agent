@@ -45,10 +45,14 @@ Run: `python scripts/build_kb.py`
 
 | File | Purpose |
 |---|---|
-| `client.py` | `LLMClient` wrapper around the OpenAI SDK. Provides `chat()`, `chat_json()`, and `stream()`. Retries on transient errors; skips retry on authentication errors. Get the singleton via `get_llm_client()`. |
+| `client.py` | `LLMClient` wrapper around the OpenAI SDK. Provides `chat()`, `chat_json()`, and `stream()`. Retries on transient errors; skips retry on authentication errors. `_extract_json_object` strips Qwen3 `<think>` blocks before JSON extraction to prevent greedy-regex mismatches. Get the singleton via `get_llm_client()`. |
 | `prompts.py` | All LLM system prompts: `ROUTER_SYSTEM`, `KB_QA_SYSTEM`, `SAFETY_CLASSIFIER_SYSTEM`. Edit prompts here only. |
 
-**When to touch:** LLM behaving incorrectly → `prompts.py`. Endpoint/auth issues → `client.py`.
+Key `prompts.py` notes:
+- `ROUTER_SYSTEM`: intent examples include cases without asset type for `ACTION_CHECK_TRANSACTION` (the agent asks for the asset in the next turn); explicit negative examples distinguish general "why is my withdrawal delayed?" from specific transaction ID lookups.
+- `KB_QA_SYSTEM`: sources are numbered `[SOURCE 1]`, `[SOURCE 2]`, etc.; model must trace every claim to a specific source; topic-named deferrals required when KB lacks an answer; partial-info synthesis preferred over full deferral; user's exact asset/feature terms must be mirrored.
+
+**When to touch:** LLM behaving incorrectly → `prompts.py`. Endpoint/auth issues → `client.py`. JSON parsing fails for reasoning models → `_extract_json_object` in `client.py`.
 
 ---
 
@@ -74,7 +78,7 @@ The core agent logic. Start in `graph.py` for the big picture.
 | `graph.py` | LangGraph pipeline definition. Five nodes: `load`, `guard`, `intent`, `dispatch`, `persist`. All routing logic, memory shortcuts, and action orchestration live in `node_dispatch`. |
 | `router.py` | `classify_intent(messages, user_text) → IntentResult`. Calls the LLM with `ROUTER_SYSTEM` and parses JSON. Falls back to `AMBIGUOUS` on failure. |
 | `guardrails.py` | `run_guardrails(user_text, skip_llm) → GuardResult`. Regex prescreen always runs; LLM classifier runs only when `skip_llm=False`. |
-| `qa.py` | `answer_kb(query, chunks, conversation_tail) → KBAnswer`. Generates a grounded answer from retrieved chunks with source attribution. Temperature is 0.0 for determinism. |
+| `qa.py` | `answer_kb(query, conversation_tail) → (concise_answer, details, citations, confidence)`. Retrieves chunks, formats them as numbered `[SOURCE 1]`, `[SOURCE 2]`, … blocks, then calls the LLM. If `chat_json` fails (model outputs prose instead of JSON), retries with `client.chat()` and returns the prose directly rather than falling back to a raw chunk excerpt. Temperature 0.1 for determinism. |
 | `schemas.py` | Pydantic models and enums: `Intent`, `AgentState`, `AgentResponse`, `IntentResult`, `GuardResult`. |
 
 **When to touch:** Routing failures → `router.py` or `prompts.py`. Safety false positives → `guardrails.py`. Wrong KB answer → `qa.py` or `prompts.py`. Action not triggering/completing → `graph.py` (node_dispatch). State/memory issues → `graph.py` (load_partial_state, scan_history_for_slot).
@@ -141,10 +145,11 @@ Key helpers:
 |---|---|
 | `test_cases.json` | 50 test scenarios. Each case defines inputs, expected intent, status, and assertion checks. |
 | `runner.py` | Loads test cases, runs each through `run_agent_turn`, evaluates assertions, writes results to `data/eval/`. |
+| `rag_eval.py` | LLM-judge evaluation of KB Q&A responses. Scores **faithfulness** (are all claims grounded in retrieved context?) and **answer relevancy** (does the answer address what was asked?) on a 0–1 scale. Re-runs the retriever to get full chunk text for the judge, rather than using the truncated UI excerpts. Run with `python -m app.eval.rag_eval`. |
 | `retrieval_eval.py` | Retrieval-only smoke test — no LLM needed. Checks FAISS index integrity and retrieval recall on sample queries. |
 | `__main__.py` | Entry point for `python -m app.eval`. |
 
-**When to touch:** New agent behaviour → add test cases in `test_cases.json`. New assertion type → add to `_check_expect()` in `runner.py`. Retrieval degraded → `retrieval_eval.py`.
+**When to touch:** New agent behaviour → add test cases in `test_cases.json`. New assertion type → add to `_check_expect()` in `runner.py`. RAG quality degraded → inspect `rag_eval_results.csv` and `rag_metrics.json`. Retrieval degraded → `retrieval_eval.py`.
 
 ---
 

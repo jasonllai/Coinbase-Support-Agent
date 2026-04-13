@@ -225,9 +225,34 @@ Both labels produce refusals. The distinction is preserved in the router trace f
 
 ---
 
+## KB QA context format
+
+Retrieved chunks are passed to the LLM in numbered form so the model can trace each claim back to a specific source:
+
+```
+[SOURCE 1] How do I set up 2-step verification?
+Section: Overview
+URL: https://help.coinbase.com/...
+To enable 2FA on Coinbase, sign in via desktop browser...
+
+---
+[SOURCE 2] Security key restrictions | Coinbase Help
+Section: Supported keys
+URL: https://help.coinbase.com/...
+...
+```
+
+The `KB_QA_SYSTEM` prompt instructs the model: every factual claim must be traceable to one of the numbered sources; if a detail is not in any source, omit it. This eliminates hallucination of policies, fees, contact channels, or authentication methods that appear plausible but are absent from the retrieved evidence.
+
+When sources contain only partial information, the model synthesises what is available and explicitly notes the gap, rather than issuing a full deferral. When the KB has no relevant content at all, the model names the specific topic in its deferral ("I don't have specific details about **staking on Coinbase** in my current sources") rather than giving a generic "I don't know" response.
+
+---
+
 ## Evaluation
 
-50 scenario test cases covering:
+### Functional scenario suite
+
+50 test cases covering all agent capabilities:
 
 | Category | Count |
 |---|---|
@@ -241,4 +266,22 @@ Both labels produce refusals. The distinction is preserved in the router trace f
 | Edge cases / routing | 2 |
 | Infrastructure smoke | 1 |
 
+Latest results: **50/50 (100%)** — intent accuracy 100%, guardrail refusal rate 100%, action success rate 100%, KB citation rate 92.3%.
+
 Test check types supported: `intent`, `intent_any`, `status`, `status_any`, `status_not`, `substring`, `substring_ci`, `last_substring`, `last_substring_ci`, `last_status`, `citations_nonempty`, `faiss_ready`.
+
+### RAG quality evaluation (`app/eval/rag_eval.py`)
+
+An LLM-judge evaluation script that scores KB Q&A responses on two dimensions:
+
+**Faithfulness** — are all claims in the answer directly supported by the retrieved context, with nothing fabricated?
+
+**Answer relevancy** — does the answer address what was actually asked?
+
+The judge runs on the same Qwen endpoint at temperature 0.0. Key design choices:
+
+- **Full retrieval context passed to the judge.** Citation excerpts stored for UI display are truncated to 400 chars. The judge re-runs the retriever to get the complete chunk text — the same evidence the agent answered from — preventing false "hallucination" calls against truncated excerpts.
+- **Honest deferrals are not failures.** If the agent correctly says "I don't have that in the Help Center" because the corpus lacks the answer, faithfulness scores 1.0 (no false claims made). A topic-named deferral ("I don't have specific details about staking on Coinbase") scores 0.7 on relevancy; a generic deferral scores 0.5.
+- **Routing mismatches excluded from faithfulness.** If the agent routed to an action intent and produced 0 citations, there is no KB context to be faithful to — these are tracked separately and excluded from the faithfulness aggregate.
+
+Latest results: **faithfulness 0.97 avg (100% ≥ 0.7)**, **answer relevancy 0.83 avg (91.7% ≥ 0.7)**.

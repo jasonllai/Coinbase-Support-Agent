@@ -116,3 +116,48 @@ Tests use the weakest assertion that would catch a real failure:
 - `status: clarify` not `status: error` for invalid input — the agent re-prompts rather than hard-failing, which is the correct UX
 
 This philosophy means a test failure always indicates a genuine regression, not a stylistic mismatch.
+
+---
+
+## RAG faithfulness and answer relevancy evaluation
+
+Two LLM-judge metrics were added to assess KB Q&A quality beyond pass/fail scenario tests.
+
+**The core challenge:** standard evals check that a response exists and cites sources — they do not check whether claims are grounded. A model can hallucinate plausible-sounding policies that never appear in retrieved chunks while still passing a citation-presence test.
+
+**Faithfulness judge design:**
+- Passes the full retrieved chunk text (not the truncated 400-char UI excerpt) to the judge. Using truncated excerpts produced false hallucination calls when the agent cited text that appeared after character 400 — the judge couldn't see it.
+- Honest deferrals score 1.0: if the agent says "I don't have that info" and makes no false claims, that is maximally faithful. Only fabricated specific facts (invented fees, phone numbers, policies) score below 0.7.
+
+**Relevancy judge design:**
+- Three tiers for deferrals distinguish quality: partial-info + acknowledged gap → 0.8, topic-named deferral → 0.7, generic "I don't know" → 0.5. This breaks the bimodal "full answer = 1.0, anything else = 0.5" pattern and rewards agents that give useful partial information.
+- Routing mismatches (agent routed to an action intent, so no KB context was retrieved) are excluded from the faithfulness aggregate and flagged separately — they represent routing quality failures, not KB QA faithfulness failures.
+
+---
+
+## `_extract_json_object` and Qwen3 `<think>` blocks
+
+Qwen3 produces chain-of-thought reasoning inside `<think>...</think>` tags before every response. The original `_extract_json_object` function used the greedy regex `\{[\s\S]*\}` to find the JSON object. When the think block contained natural-language `{curly braces}`, the greedy match started at the first brace inside the thinking block and ended at the last brace in the actual JSON — producing a span that was not valid JSON.
+
+The fix:
+1. Strip `<think>...</think>` blocks with a non-greedy regex before any JSON extraction attempt
+2. Try `json.loads` on the cleaned text directly
+3. Fall back to finding the last non-nested `{...}` block, then to the greedy match on the already-cleaned text
+
+This fix is applied at the `LLMClient` layer (`client.py`) so all callers benefit automatically. A parallel implementation in `rag_eval.py`'s `_parse_judge_response` handles the same issue for the judge's responses.
+
+---
+
+## KB QA source attribution and deferral quality
+
+Earlier versions of `KB_QA_SYSTEM` instructed the model to "answer from sources only" — necessary but not sufficient. The model would still add plausible-sounding details from training knowledge (authentication methods, document types, contact channels) that did not appear in the retrieved chunks.
+
+The fixes:
+
+1. **Numbered sources.** Retrieved chunks are formatted as `[SOURCE 1]`, `[SOURCE 2]`, etc. The prompt explicitly states: "every factual claim must be traceable to a specific numbered source; if a detail is not in any source, leave it out." This gives the model a concrete audit trail, not just a vague prohibition.
+
+2. **Partial-info synthesis over full deferral.** When sources contain tangential information (e.g., payment method details while asking about fees), the model now shares what IS available and notes the gap, rather than issuing a blanket "I don't have that."
+
+3. **Topic-named deferrals.** Generic "I don't have that info" responses make it unclear what the agent was asked. The prompt now requires the model to name the exact topic: "I don't have specific details about **staking on Coinbase** in my current sources." This improves relevancy scores and user experience simultaneously.
+
+4. **Mirroring the user's terms.** If the user asks about "Bitcoin", the answer says "Bitcoin" — not just "crypto". The prompt includes an explicit instruction to mirror the user's specific asset and feature names throughout the answer.
