@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from app.llm.client import get_llm_client
 from app.llm.prompts import KB_QA_SYSTEM
@@ -30,12 +31,12 @@ def answer_kb(
     _seen_urls: dict[str, int] = {}   # url → index of best citation so far
     citations: list[dict] = []
 
-    for h in hits:
+    for idx, h in enumerate(hits, 1):
         context_blocks.append(
-            f"SOURCE_TITLE: {h.article_title}\n"
-            f"SECTION: {h.section_title}\n"
+            f"[SOURCE {idx}] {h.article_title}\n"
+            f"Section: {h.section_title}\n"
             f"URL: {h.canonical_url}\n"
-            f"TEXT:\n{h.text}\n",
+            f"{h.text}\n",
         )
         url = h.canonical_url or ""
         if url and url in _seen_urls:
@@ -80,15 +81,24 @@ def answer_kb(
         return concise, details_str, citations, conf
     except Exception as e:
         log.warning("kb answer failed: %s", e)
-        # Build a readable answer directly from the top retrieved excerpts
+        # The model sometimes outputs well-formed prose without JSON wrapping.
+        # Try a plain-text chat call and use the prose directly if it looks useful.
+        try:
+            raw = client.chat(
+                [{"role": "system", "content": KB_QA_SYSTEM}, {"role": "user", "content": user_prompt}],
+                temperature=0.1,
+            )
+            prose = re.sub(r"<think>[\s\S]*?</think>", "", raw, flags=re.IGNORECASE).strip()
+            if prose and len(prose) > 30:
+                return prose, None, citations, 0.4
+        except Exception:
+            pass
+        # Last resort: pull the most relevant excerpt from the top retrieved chunk
         if hits:
             top = hits[0]
             excerpt = (top.text or "")[:600].strip()
             section = f" — {top.section_title}" if top.section_title else ""
-            fallback = (
-                f"Here's what I found in **{top.article_title}**{section}:\n\n"
-                f"{excerpt}"
-            )
+            fallback = f"Here's what I found in **{top.article_title}**{section}:\n\n{excerpt}"
             if len(hits) > 1:
                 fallback += f"\n\n*Also relevant: {hits[1].article_title}*"
         else:

@@ -1,0 +1,62 @@
+{
+  "cases_evaluated": 12,
+  "kb_responses_scored": 11,
+  "routing_mismatches": 1,
+  "avg_faithfulness": 0.9727,
+  "avg_relevancy": 0.825,
+  "faithfulness_pass_rate": 1.0,
+  "relevancy_pass_rate": 0.9167,
+  "pass_threshold": 0.7,
+  "note_faithfulness": "Computed only on KB_QA responses with \u22651 citation. Routing mismatches excluded.",
+  "note_relevancy": "Computed on all cases including routing mismatches.",
+  "per_case": {
+    "E01_kb_2fa": {
+      "faithfulness": 1.0,
+      "relevancy": 0.8
+    },
+    "E02_kb_fees": {
+      "faithfulness": 1.0,
+      "relevancy": 0.7
+    },
+    "E18_kb_withdrawal_delay": {
+      "faithfulness": 1.0,
+      "relevancy": 1.0
+    },
+    "E19_kb_kyc": {
+      "faithfulness": 1.0,
+      "relevancy": 1.0
+    },
+    "E20_kb_account_restrictions": {
+      "faithfulness": "N/A (routing mismatch)",
+      "relevancy": 0.3
+    },
+    "E21_kb_buying_first_crypto": {
+      "faithfulness": 0.7,
+      "relevancy": 0.7
+    },
+    "E22_kb_security_overview": {
+      "faithfulness": 1.0,
+      "relevancy": 1.0
+    },
+    "E23_kb_staking": {
+      "faithfulness": 1.0,
+      "relevancy": 0.7
+    },
+    "E24_kb_contact_support": {
+      "faithfulness": 1.0,
+      "relevancy": 1.0
+    },
+    "E25_kb_deposit_bank": {
+      "faithfulness": 1.0,
+      "relevancy": 1.0
+    },
+    "E26_kb_vault": {
+      "faithfulness": 1.0,
+      "relevancy": 1.0
+    },
+    "E27_kb_advanced_trade": {
+      "faithfulness": 1.0,
+      "relevancy": 0.7
+    }
+  }
+}

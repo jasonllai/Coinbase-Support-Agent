@@ -16,11 +16,33 @@ log = logging.getLogger(__name__)
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
-    text = text.strip()
-    m = re.search(r"\{[\s\S]*\}\s*$", text)
-    if not m:
+    """Extract a JSON object from model output, handling Qwen3 <think> blocks.
+
+    The model wraps reasoning in <think>...</think> before the actual output. Those
+    blocks often contain {curly braces} in natural language, which make a greedy
+    regex match the wrong span.  We strip the think block first, then parse.
+    """
+    # 1. Strip reasoning blocks
+    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
+
+    # 2. Direct parse of whatever remains
+    try:
+        return json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # 3. Find the last non-nested {...} block that contains "concise_answer" or any key
+    for m in reversed(list(re.finditer(r"\{[^{}]+\}", cleaned))):
+        try:
+            return json.loads(m.group(0))
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+    # 4. Greedy match on cleaned text (think block already stripped)
+    m2 = re.search(r"\{[\s\S]*\}\s*$", cleaned)
+    if not m2:
         raise ValueError("no json object in model output")
-    return json.loads(m.group(0))
+    return json.loads(m2.group(0))
 
 
 class LLMClient:

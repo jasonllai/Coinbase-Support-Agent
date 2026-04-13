@@ -1,0 +1,17 @@
+{
+  "total_cases": 50,
+  "passed": 50,
+  "scenario_success_rate": 1.0,
+  "intent_accuracy": 1.0,
+  "guardrail_refusal_rate": 1.0,
+  "kb_citation_rate": 0.9230769230769231,
+  "action_success_rate": 1.0,
+  "intent_tests_n": 24,
+  "intent_hits": 24,
+  "guard_tests_n": 9,
+  "guard_hits": 9,
+  "citation_tests_n": 13,
+  "citation_hits": 12,
+  "action_tests_n": 26,
+  "action_hits": 26
+}
