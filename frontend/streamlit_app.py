@@ -97,23 +97,32 @@ _BLUE_LIGHT = "#EBF0FF"
 # ─── CSS (inlined, no external font CDN that can fail) ─────────────────────
 CSS = f"""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+/* Apply Inter font globally */
+html, body, [class*="css"] {{
+    font-family: 'Inter', sans-serif !important;
+}}
+
 /* hide Streamlit chrome */
 #MainMenu, footer {{ visibility:hidden; }}
 .stDeployButton {{ display:none; }}
 header[data-testid="stHeader"] {{ background:transparent !important; }}
 
 /* tighten main container */
-.block-container {{ padding-top:0 !important; max-width:980px; }}
+.block-container {{ padding-top:0 !important; max-width:980px; padding-bottom: 120px !important; }}
 
 /* sidebar */
-[data-testid="stSidebar"] {{ border-right:1px solid #E2E8F0; }}
+[data-testid="stSidebar"] {{ border-right:1px solid #E2E8F0; background-color:#FAFAFA; }}
+[data-testid="stSidebar"] button {{ border-radius: 10px !important; font-weight: 500 !important; }}
 
 /* ── Chips ── explicit colours, work in both themes ── */
 .cb-chip {{
-    display:inline-flex; align-items:center; gap:5px;
-    padding:3px 11px; border-radius:20px;
+    display:inline-flex; align-items:center; gap:6px;
+    padding:4px 12px; border-radius:24px;
     font-size:11.5px; font-weight:600; letter-spacing:.02em;
-    margin-bottom:6px;
+    margin-bottom:8px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.03);
 }}
 .cb-chip-knowledge {{ background:#EFF6FF; color:#1D4ED8; border:1px solid #BFDBFE; }}
 .cb-chip-action    {{ background:#F0FDF4; color:#15803D; border:1px solid #BBF7D0; }}
@@ -123,56 +132,68 @@ header[data-testid="stHeader"] {{ background:transparent !important; }}
 
 /* ── Source cards ── */
 .cb-src {{
-    background:#F8FAFC; border:1px solid #E2E8F0;
-    border-radius:10px; padding:12px 14px; margin:6px 0;
+    background:#FFFFFF; border:1px solid #E2E8F0;
+    border-radius:12px; padding:16px 18px; margin:8px 0;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.02);
+    transition: all 0.2s ease;
 }}
-.cb-src:hover {{ border-color:{_BLUE}; background:{_BLUE_LIGHT}; }}
-.cb-src-title   {{ font-size:13px; font-weight:600; color:#1E293B; margin:0 0 2px 0; }}
-.cb-src-section {{ font-size:12px; color:#64748B; margin:0 0 5px 0; }}
-.cb-src-excerpt {{ font-size:12px; color:#475569; line-height:1.5; margin:0 0 6px 0; }}
-.cb-src-link    {{ font-size:12px; color:{_BLUE}; font-weight:500; text-decoration:none; }}
+.cb-src:hover {{ 
+    border-color:{_BLUE}; 
+    background:#FAFAFA; 
+    transform: translateY(-2px); 
+    box-shadow: 0 6px 12px rgba(0,82,255,0.06); 
+}}
+.cb-src-title   {{ font-size:14px; font-weight:600; color:#0F172A; margin:0 0 4px 0; }}
+.cb-src-section {{ font-size:12.5px; color:#64748B; margin:0 0 6px 0; font-weight: 500; }}
+.cb-src-excerpt {{ font-size:13px; color:#334155; line-height:1.6; margin:0 0 8px 0; }}
+.cb-src-link    {{ font-size:12.5px; color:{_BLUE}; font-weight:600; text-decoration:none; display: inline-flex; align-items: center; gap: 4px; }}
 .cb-src-link:hover {{ text-decoration:underline; }}
 
 /* ── Action cards ── */
-.cb-act        {{ background:#F0FDF4; border:1px solid #BBF7D0; border-radius:10px; padding:12px 14px; margin:8px 0; }}
-.cb-act.err    {{ background:#FFF1F2; border-color:#FECDD3; }}
-.cb-act.clarify {{ background:#FFFBEB; border-color:#FDE68A; }}
-.cb-act-label  {{ font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#15803D; margin-bottom:6px; }}
-.cb-act.err    .cb-act-label {{ color:#BE123C; }}
-.cb-act.clarify .cb-act-label {{ color:#B45309; }}
-.cb-act-row    {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:4px 0; }}
-.cb-act-key    {{ font-size:12px; color:#64748B; font-weight:500; min-width:110px; }}
-.cb-act-val    {{ font-size:13px; color:#1E293B; font-weight:600; }}
-.cb-tx-status  {{ display:inline-block; padding:2px 10px; border-radius:20px; font-size:12px; font-weight:700; }}
+.cb-act        {{ background:#FFFFFF; border:1px solid #E2E8F0; border-radius:12px; padding:16px 18px; margin:10px 0; box-shadow: 0 2px 8px rgba(0,0,0,0.03); border-left: 4px solid #10B981; }}
+.cb-act.err    {{ border-left-color: #EF4444; }}
+.cb-act.clarify {{ border-left-color: #F59E0B; }}
+.cb-act-label  {{ font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#10B981; margin-bottom:10px; display: flex; align-items: center; gap: 6px; }}
+.cb-act.err    .cb-act-label {{ color:#EF4444; }}
+.cb-act.clarify .cb-act-label {{ color:#F59E0B; }}
+.cb-act-row    {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:6px 0; padding: 4px 0; border-bottom: 1px solid #F1F5F9; }}
+.cb-act-row:last-child {{ border-bottom: none; padding-bottom: 0; }}
+.cb-act-key    {{ font-size:12.5px; color:#64748B; font-weight:500; min-width:120px; }}
+.cb-act-val    {{ font-size:13.5px; color:#1E293B; font-weight:600; }}
+.cb-tx-status  {{ display:inline-block; padding:4px 12px; border-radius:24px; font-size:12px; font-weight:700; text-transform: uppercase; letter-spacing: .02em; }}
 .cb-tx-completed {{ background:#DCFCE7; color:#15803D; }}
 .cb-tx-pending   {{ background:#FEF9C3; color:#854D0E; }}
 .cb-tx-failed    {{ background:#FFE4E6; color:#9F1239; }}
 .cb-tx-review    {{ background:#FEF3C7; color:#92400E; }}
 
 /* ── Header ── */
-.cb-hdr      {{ background:{_BLUE}; padding:14px 24px; display:flex; align-items:center;
-               gap:12px; margin:0 -1rem 20px -1rem; border-radius:0 0 12px 12px; }}
-.cb-hdr-t    {{ color:white; font-size:18px; font-weight:700; margin:0; }}
-.cb-hdr-s    {{ color:rgba(255,255,255,.8); font-size:13px; margin:0; }}
+.cb-hdr      {{ background: linear-gradient(135deg, #0052FF 0%, #003EBF 100%); padding:20px 32px; display:flex; align-items:center;
+               gap:16px; margin:0 -1rem 30px -1rem; border-radius:0 0 20px 20px; box-shadow: 0 4px 12px rgba(0,82,255,0.15); }}
+.cb-hdr-t    {{ color:white; font-size:20px; font-weight:700; margin:0; letter-spacing: -0.01em; }}
+.cb-hdr-s    {{ color:rgba(255,255,255,.85); font-size:14px; font-weight:400; margin:4px 0 0 0; }}
 
 /* ── Welcome ── */
-.cb-welcome      {{ background:white; border:1px solid #E2E8F0; border-radius:16px;
-                    padding:36px 32px; text-align:center; max-width:540px; margin:40px auto; }}
-.cb-welcome h2   {{ color:#1E293B; font-size:22px; font-weight:700; margin-bottom:10px; }}
-.cb-welcome p    {{ color:#64748B; font-size:14px; line-height:1.65; margin-bottom:16px; }}
-.cb-pill         {{ display:inline-block; background:{_BLUE_LIGHT}; color:{_BLUE};
-                    border-radius:20px; padding:4px 12px; font-size:12px; font-weight:600; margin:3px; }}
+.cb-welcome      {{ background:white; border:1px solid #E2E8F0; border-radius:20px;
+                    padding:44px 36px; text-align:center; max-width:580px; margin:50px auto;
+                    box-shadow: 0 8px 32px rgba(0,0,0,0.04); }}
+.cb-welcome h2   {{ color:#0F172A; font-size:26px; font-weight:700; margin-bottom:12px; letter-spacing: -0.02em; }}
+.cb-welcome p    {{ color:#475569; font-size:15px; line-height:1.6; margin-bottom:28px; }}
+.cb-pill         {{ display:inline-block; background:#F8FAFC; color:#334155; border: 1px solid #E2E8F0;
+                    border-radius:24px; padding:6px 16px; font-size:13px; font-weight:500; margin:5px;
+                    transition: all 0.2s ease; cursor: default; }}
+.cb-pill:hover   {{ background:{_BLUE_LIGHT}; color:{_BLUE}; border-color: #BFDBFE; transform: translateY(-1px); }}
 
 /* ── Sidebar helpers ── */
-.cb-sec  {{ font-size:11px; font-weight:700; text-transform:uppercase;
-            letter-spacing:.08em; color:#94A3B8; margin:16px 0 8px 0; }}
-.cb-hr   {{ border:none; border-top:1px solid #E2E8F0; margin:10px 0; }}
+.cb-sec  {{ font-size:11.5px; font-weight:700; text-transform:uppercase;
+            letter-spacing:.06em; color:#64748B; margin:20px 0 10px 0; }}
+.cb-hr   {{ border:none; border-top:1px solid #E2E8F0; margin:16px 0; }}
 .cb-badge {{ display:inline-block; background:#EFF6FF; color:#1D4ED8;
              border-radius:6px; padding:2px 8px; font-size:11px; font-weight:600; font-family:monospace; }}
 
 /* ── Warning banner ── */
-.cb-warn {{ background:#FEF3C7; border:1px solid #FDE68A; border-radius:8px;
-            padding:10px 14px; font-size:13px; color:#92400E; margin:0 0 12px 0; }}
+.cb-warn {{ background:#FFFBEB; border:1px solid #FDE68A; border-radius:12px;
+            padding:12px 16px; font-size:13.5px; color:#92400E; margin:0 0 16px 0; 
+            display: flex; align-items: center; gap: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.02); }}
 
 /* ── Conversation layout: left = agent, right = user ── */
 
@@ -180,32 +201,54 @@ header[data-testid="stHeader"] {{ background:transparent !important; }}
 .cb-user-bubble-wrap {{
     display: flex;
     justify-content: flex-end;
-    margin: 10px 0 2px 0;
+    margin: 12px 0 4px 0;
 }}
 .cb-user-bubble {{
-    background: {_BLUE};
+    background: linear-gradient(135deg, #0052FF 0%, #0043D9 100%);
     color: white;
-    border-radius: 18px 18px 4px 18px;
-    padding: 11px 16px 10px 16px;
-    max-width: 68%;
+    border-radius: 20px 20px 4px 20px;
+    padding: 12px 18px;
+    max-width: 72%;
     word-break: break-word;
-    box-shadow: 0 2px 8px rgba(0,82,255,0.15);
+    box-shadow: 0 4px 12px rgba(0,82,255,0.18);
     font-size: 14.5px;
-    line-height: 1.55;
+    line-height: 1.6;
+    letter-spacing: -0.005em;
 }}
 .cb-user-bubble p {{ margin: 0; }}
 .cb-user-ts {{
     font-size: 10.5px;
-    color: rgba(255,255,255,0.62);
-    margin-top: 5px;
+    color: rgba(255,255,255,0.7);
+    margin-top: 6px;
     text-align: right;
+    font-weight: 500;
 }}
 
 /* Assistant messages — keep st.chat_message on left, constrain width */
 [data-testid="stChatMessage"] {{
-    max-width: 82%;
+    max-width: 85%;
     margin-right: auto;
-    padding: 4px 0;
+    padding: 8px 0;
+    font-size: 14.5px;
+    line-height: 1.6;
+    color: #1E293B;
+}}
+[data-testid="stChatMessage"] .stMarkdown p {{
+    color: #1E293B;
+}}
+
+/* Style the chat input box */
+[data-testid="stChatInput"] {{
+    background-color: white !important;
+    border: 1px solid #E2E8F0 !important;
+    border-radius: 24px !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.06) !important;
+    padding: 4px 8px !important;
+    transition: all 0.2s ease !important;
+}}
+[data-testid="stChatInput"]:focus-within {{
+    border-color: {_BLUE} !important;
+    box-shadow: 0 4px 20px rgba(0,82,255,0.15) !important;
 }}
 </style>
 """
